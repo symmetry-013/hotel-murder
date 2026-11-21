@@ -1,0 +1,6 @@
+{
+  "name": "HOTEL MURDER ปริศนาโรงแรมมรณะ",
+  "description": "เกมออนไลน์แนวสืบสวนฆาตกรรมแบบ Real-time แรงบันดาลใจจากบอร์ดเกม HOTEL MURDER พร้อมบอท AI ปากร้ายสไตล์เพื่อนซี้และระบบห้องพัก 201-209",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

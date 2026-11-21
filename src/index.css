@@ -1,0 +1,199 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Cinzel", "Noto Sans Thai", serif;
+  --font-sans: "Plus Jakarta Sans", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-obsidian: #0B0A0C;
+  --color-velvet: #151217;
+  --color-mahogany: #1E181D;
+  --color-brass: #C8A25A;
+  --color-brass-dim: #8D6F3A;
+  --color-crimson: #A81C26;
+  --color-crimson-bright: #DC2626;
+  --color-parchment: #EAE4DC;
+  --color-ash: #9D948A;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    font-family: var(--font-sans);
+    background-color: #0B0A0C;
+    color: #EAE4DC;
+    letter-spacing: 0.01em;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom noir scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #100E12;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #332A2E;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #8D6F3A;
+}
+
+/* Compositor-only Contextual Full-Screen Animation Keyframes */
+@keyframes noir-shake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  12% { transform: translate3d(-14px, 8px, 0) rotate(-0.8deg); }
+  25% { transform: translate3d(16px, -10px, 0) rotate(0.9deg); }
+  38% { transform: translate3d(-12px, -6px, 0) rotate(-0.6deg); }
+  52% { transform: translate3d(10px, 9px, 0) rotate(0.5deg); }
+  68% { transform: translate3d(-6px, 4px, 0) rotate(-0.3deg); }
+  84% { transform: translate3d(4px, -3px, 0); }
+}
+
+@keyframes slash-draw {
+  0% { stroke-dashoffset: 1600; opacity: 0; }
+  15% { opacity: 1; }
+  60% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0.85; }
+}
+
+@keyframes crimson-flash {
+  0% { opacity: 0; }
+  12% { opacity: 0.92; }
+  30% { opacity: 0.35; }
+  55% { opacity: 0.55; }
+  100% { opacity: 0.15; }
+}
+
+@keyframes lock-slam {
+  0% { transform: translate3d(0, -34px, 0) scale(1.18); opacity: 0; }
+  35% { transform: translate3d(0, 4px, 0) scale(0.96); opacity: 1; }
+  55% { transform: translate3d(0, -3px, 0) scale(1.02); }
+  100% { transform: translate3d(0, 0, 0) scale(1); opacity: 1; }
+}
+
+@keyframes gold-aura {
+  0% { transform: scale(0.7); opacity: 0; }
+  30% { transform: scale(1.12); opacity: 0.85; }
+  100% { transform: scale(1.38); opacity: 0; }
+}
+
+@keyframes eye-awaken {
+  0% { transform: scaleY(0.05) scaleX(0.92); opacity: 0.2; }
+  38% { transform: scaleY(1.06) scaleX(1.02); opacity: 1; }
+  65% { transform: scaleY(0.96) scaleX(1); opacity: 1; }
+  100% { transform: scaleY(1) scaleX(1); opacity: 1; }
+}
+
+@keyframes beam-sweep {
+  0% { transform: rotate(-18deg) translate3d(-30px, 0, 0); opacity: 0.25; }
+  50% { transform: rotate(10deg) translate3d(24px, 0, 0); opacity: 0.72; }
+  100% { transform: rotate(-4deg) translate3d(0, 0, 0); opacity: 0.5; }
+}
+
+@keyframes shutter-drop {
+  0% { transform: translate3d(0, -100%, 0); }
+  68% { transform: translate3d(0, 2%, 0); }
+  82% { transform: translate3d(0, -1.5%, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+
+@keyframes stamp-slam {
+  0% { transform: scale(1.65) rotate(-5deg); opacity: 0; }
+  55% { transform: scale(0.95) rotate(-2deg); opacity: 1; }
+  100% { transform: scale(1) rotate(-2deg); opacity: 1; }
+}
+
+@keyframes fade-up-settle {
+  0% { opacity: 0; transform: translate3d(0, 12px, 0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes signal-ring {
+  0% { opacity: 0.9; transform: scale(0.98); }
+  50% { opacity: 0.45; transform: scale(1.02); }
+  100% { opacity: 0.9; transform: scale(0.98); }
+}
+
+.animate-noir-shake {
+  animation: noir-shake 0.58s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.animate-slash-draw {
+  stroke-dasharray: 1600;
+  stroke-dashoffset: 1600;
+  animation: slash-draw 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-crimson-flash {
+  animation: crimson-flash 1.4s ease-out forwards;
+}
+
+.animate-lock-slam {
+  animation: lock-slam 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-gold-aura {
+  animation: gold-aura 1.3s ease-out infinite;
+}
+
+.animate-eye-awaken {
+  animation: eye-awaken 0.72s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-beam-sweep {
+  animation: beam-sweep 2.8s ease-in-out infinite alternate;
+}
+
+.animate-shutter-drop {
+  animation: shutter-drop 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-stamp-slam {
+  animation: stamp-slam 0.48s cubic-bezier(0.16, 1, 0.3, 1) 0.45s both;
+}
+
+.animate-settle {
+  animation: fade-up-settle 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-signal-ring {
+  animation: signal-ring 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-noir-shake,
+  .animate-slash-draw,
+  .animate-crimson-flash,
+  .animate-lock-slam,
+  .animate-gold-aura,
+  .animate-eye-awaken,
+  .animate-beam-sweep,
+  .animate-shutter-drop,
+  .animate-stamp-slam,
+  .animate-settle,
+  .animate-signal-ring {
+    animation-duration: 0.01ms !important;
+  }
+}
