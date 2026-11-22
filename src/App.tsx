@@ -4,6 +4,7 @@ import {
   Bot,
   Building2,
   Check,
+  CheckCircle2,
   Clock,
   Ghost,
   IdCard,
@@ -39,7 +40,12 @@ import { soundEngine } from './utils/soundEngine';
 import { TitleLogo } from './components/TitleLogo';
 import { LobbyView } from './components/LobbyView';
 import { HotelFloorplan } from './components/HotelFloorplan';
-import { RoleCardContent, RoleCardModal, SecretRoleBar } from './components/RoleCardModal';
+import {
+  InvestigationLogBox,
+  RoleCardContent,
+  RoleCardModal,
+  SecretRoleBar,
+} from './components/RoleCardModal';
 import { SceneAnimationOverlay } from './components/SceneAnimationOverlay';
 import { SecretKillerComms } from './components/SecretKillerComms';
 import { GameOverScreen } from './components/GameOverScreen';
@@ -307,6 +313,11 @@ export default function App() {
     socketRef.current?.emit('night:action', { target });
   };
 
+  const handleAcknowledgeNight = () => {
+    soundEngine.playReadyChime();
+    socketRef.current?.emit('night:acknowledge');
+  };
+
   const handleSendChat = (e: FormEvent) => {
     e.preventDefault();
     const clean = chatInput.trim();
@@ -401,22 +412,29 @@ export default function App() {
   const myRoleDef = myRole ? ROLE_DEFINITIONS[myRole] : null;
   const isEvil = intel?.faction === 'EVIL';
 
+  const isNightReview = isNight && roomState.nightStage === 'REVIEW';
+  const totalFloors = roomState.totalFloors;
+
   const phaseLabel = isSetup
     ? 'กำลังสุ่มห้องพักและบทบาท'
     : isDay
       ? `กลางวัน · วันที่ ${roomState.day}/${roomState.maxDays}`
       : isVote
-        ? roomState.day >= 2
+        ? roomState.day >= 3
           ? `โหวต 3 รูปแบบ · วันที่ ${roomState.day}/${roomState.maxDays}`
-          : `โหวตเปิดห้อง · วันที่ ${roomState.day}/${roomState.maxDays}`
+          : roomState.day === 2
+            ? `โหวตห้อง / ปิดชั้น · วันที่ ${roomState.day}/${roomState.maxDays}`
+            : `โหวตเปิดห้อง · วันที่ ${roomState.day}/${roomState.maxDays}`
         : isVoteResult
           ? `ผลโหวต · วันที่ ${roomState.day}/${roomState.maxDays}`
-          : `กลางคืน · คืนที่ ${roomState.day}/${roomState.maxDays}`;
+          : isNightReview
+            ? `สรุปผลสกิลกลางคืน · คืนที่ ${roomState.day}/${roomState.maxDays}`
+            : `กลางคืน · คืนที่ ${roomState.day}/${roomState.maxDays}`;
 
   const alivePlayers = roomState.players.filter((p) => p.alive);
   const myDayVote = intel?.myDayVote ?? null;
   const needsPlayerPickerAtNight =
-    isNight && isAlive && (myRole === 'DETECTIVE' || myRole === 'ACCOMPLICE');
+    isNight && !isNightReview && isAlive && (myRole === 'DETECTIVE' || myRole === 'ACCOMPLICE');
 
   // Always-visible Evil Team Partner Banner (Murderer & Accomplice see each other from Game Start!)
   const evilPartnerBanner =
@@ -433,13 +451,13 @@ export default function App() {
         </div>
         <span className="text-[11px] text-[#FCA5A5]">
           {myRole === 'MURDERER'
-            ? 'กลางคืนเลือกฆ่าได้อย่างอิสระทั้ง 7 ชั้น'
+            ? `กลางคืนเลือกฆ่าได้อย่างอิสระทั้ง ${totalFloors} ชั้น`
             : 'กลางคืนสืบชั้นเหยื่อทันทีแล้วส่งซิกในแชทลับ'}
         </span>
       </div>
     ) : null;
 
-  // Night Action Panel (shared between Desktop center & Mobile Tab 3)
+  // Night Action & Night Result Acknowledge Panel (shared between Desktop center & Mobile Tab 3)
   const nightActionBlock = isNight ? (
     <section className="rounded-xl border border-[#5B212A] bg-[#1A1015]/95 p-4 space-y-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -447,38 +465,87 @@ export default function App() {
           <Moon className="h-5 w-5 text-[#F87171] shrink-0" />
           <div>
             <h2 className="font-display text-base font-semibold text-[#F8F3EE]">
-              ปฏิบัติการกลางคืน — {myRoleDef?.nameTh ?? 'แขก'}
+              {isNightReview
+                ? `สรุปผลสกิลคืนที่ ${roomState.day} — ${myRoleDef?.nameTh ?? 'แขก'}`
+                : `ปฏิบัติการกลางคืน — ${myRoleDef?.nameTh ?? 'แขก'}`}
             </h2>
             <p className="text-xs text-[#CFC8BF]">
               {!isAlive
                 ? 'วิญญาณกำลังเฝ้ามองความมืดในโรงแรม...'
-                : myRole === 'MURDERER'
-                  ? 'เลือกฆ่าได้อิสระทุกห้องที่ยังไม่ปิดทั่วทั้ง 7 ชั้น (ห้ามเลือกห้องตัวเอง) — จะเชื่อซิกผู้ช่วยหรือเลือกเองก็ได้!'
-                  : myRole === 'KEYMASTER'
-                    ? intel?.lastKeymasterLockedRoom
-                      ? `กดเลือก 1 ห้องบนแผนผังเพื่อล็อกป้องกันคืนนี้ (ห้ามล็อกห้อง ${intel.lastKeymasterLockedRoom} ซ้ำ!)`
-                      : 'กดเลือก 1 ห้องบนแผนผังเพื่อล็อกป้องกันการฆ่าคืนนี้'
-                    : myRole === 'HOUSEKEEPER'
-                      ? 'กดปุ่ม "ตรวจชั้น" ด้านซ้ายของแผนผัง (ชั้น 1–7) เพื่อนับคนรอดในชั้นนั้น'
-                      : myRole === 'GLAZIER'
-                        ? 'กดปุ่ม "ตรวจแถว" ด้านบนของแผนผัง (แถว 1–3) เพื่อนับคนรอดทั้งแถวแนวตั้ง'
-                        : myRole === 'WITNESS'
-                          ? 'กดปุ่ม "เฝ้าชั้น" ด้านซ้ายของแผนผัง (ชั้น 1–7) เพื่อจับตำแหน่งฆาตกรหากมีคนตายชั้นนั้น'
-                          : myRole === 'DETECTIVE'
-                            ? 'เลือกชื่อผู้เล่นที่ยังมีชีวิต 1 คนด้านล่างเพื่อสืบว่าพักอยู่ชั้นไหน'
-                            : myRole === 'ACCOMPLICE'
-                              ? 'เลือกสืบชื่อผู้เล่น 1 คนด้านล่างเพื่อรู้ชั้นพักทันที! แล้วส่งซิกชี้เป้าชั้น/ห้องให้ฆาตกรในแชทลับ'
-                              : 'คุณคือคนเมา — พักผ่อนคืนนี้ แล้วเตรียมปั่นให้ทุกคนโหวตห้อง/ชั้น/แถวคุณพรุ่งนี้!'}
+                : isNightReview
+                  ? 'อ่านผลลัพธ์สกิลคืนนี้ให้เรียบร้อย แล้วกดปุ่ม "รับทราบข้อมูล" เพื่อเข้าสู่ช่วงเช้า'
+                  : myRole === 'MURDERER'
+                    ? `เลือกฆ่าได้อิสระทุกห้องที่ยังไม่ปิดทั่วทั้ง ${totalFloors} ชั้น (ห้ามเลือกห้องตัวเอง) — จะเชื่อซิกผู้ช่วยหรือเลือกเองก็ได้!`
+                    : myRole === 'KEYMASTER'
+                      ? intel?.lastKeymasterLockedRoom
+                        ? `กดเลือก 1 ห้องบนแผนผังเพื่อล็อกป้องกันคืนนี้ (ห้ามล็อกห้อง ${intel.lastKeymasterLockedRoom} ซ้ำ!)`
+                        : 'กดเลือก 1 ห้องบนแผนผังเพื่อล็อกป้องกันการฆ่าคืนนี้'
+                      : myRole === 'HOUSEKEEPER'
+                        ? `กดปุ่ม "ตรวจชั้น" ด้านซ้ายของแผนผัง (ชั้น 1–${totalFloors}) เพื่อนับคนรอดในชั้นนั้น`
+                        : myRole === 'GLAZIER'
+                          ? 'กดปุ่ม "ตรวจแถว" ด้านบนของแผนผัง (แถว 1–3) เพื่อนับคนรอดทั้งแถวแนวตั้ง'
+                          : myRole === 'WITNESS'
+                            ? `กดปุ่ม "เฝ้าชั้น" ด้านซ้ายของแผนผัง (ชั้น 1–${totalFloors}) — หากฆาตกรลงมือฆ่าคนในชั้นที่คุณเฝ้า คุณจะรู้ทิศทางชั้นของฆาตกร`
+                            : myRole === 'DETECTIVE'
+                              ? 'เลือกชื่อผู้เล่นที่ยังมีชีวิต 1 คนด้านล่างเพื่อสืบว่าพักอยู่ชั้นไหน (ไม่เปิดเผยฝ่ายหรือบทบาท)'
+                              : myRole === 'ACCOMPLICE'
+                                ? 'เลือกสืบชื่อผู้เล่น 1 คนด้านล่างเพื่อรู้ชั้นพักทันที! แล้วส่งซิกชี้เป้าชั้น/ห้องให้ฆาตกรในแชทลับ'
+                                : 'คุณคือคนเมา — พักผ่อนคืนนี้ แล้วเตรียมปั่นให้ทุกคนโหวตห้อง/ชั้น/แถวคุณพรุ่งนี้!'}
             </p>
           </div>
         </div>
 
         <span className="font-mono-tabular text-xs text-[#C8A25A]">
-          ใช้สกิล {roomState.nightActionsSubmittedCount}/{roomState.nightActionsRequiredCount}
+          {isNightReview
+            ? `รับทราบแล้ว ${roomState.nightAckCount}/${roomState.nightAckRequiredCount}`
+            : `ใช้สกิล ${roomState.nightActionsSubmittedCount}/${roomState.nightActionsRequiredCount}`}
         </span>
       </div>
 
-      {/* Detective & Accomplice Living-Player Picker (Reveals Player's Floor) */}
+      {/* Mandatory Night Skill Result Review Card + Acknowledge Button */}
+      {isAlive && intel?.latestNightResult && (
+        <div
+          className={`rounded-xl border p-4 space-y-3 ${
+            intel.latestNightResult.tone === 'DANGER'
+              ? 'border-[#8B2330] bg-[#281117]'
+              : intel.latestNightResult.tone === 'SAFE'
+                ? 'border-[#256D52] bg-[#10261E]'
+                : 'border-[#6E5630] bg-[#221B12]'
+          }`}
+        >
+          <div className="space-y-1">
+            <p className="font-mono-tabular text-[11px] font-semibold uppercase tracking-wide text-[#E8C984]">
+              ผลลัพธ์สกิลคืนที่ {intel.latestNightResult.night} · {intel.latestNightResult.title}
+            </p>
+            <p className="text-sm sm:text-base font-semibold leading-relaxed text-[#FFF9F2]">
+              {intel.latestNightResult.detail}
+            </p>
+            <p className="text-[11px] text-[#BFB6AC]">
+              ข้อมูลนี้ถูกบันทึกไว้ในสมุดบันทึกเบาะแสส่วนตัว (My Investigation Log) แล้ว
+            </p>
+          </div>
+
+          <button
+            type="button"
+            disabled={intel.nightAcknowledged}
+            onClick={handleAcknowledgeNight}
+            className={`w-full min-h-[46px] flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold transition-colors ${
+              intel.nightAcknowledged
+                ? 'border border-[#2A6F56] bg-[#122921] text-[#6EE7B7] cursor-default'
+                : 'bg-[#C8A25A] text-[#120E09] hover:bg-[#DAB873] cursor-pointer'
+            }`}
+          >
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>
+              {intel.nightAcknowledged
+                ? 'รับทราบข้อมูลแล้ว — กำลังรอผู้เล่นอื่นเข้าสู่ช่วงเช้า...'
+                : 'รับทราบข้อมูล (Acknowledge)'}
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Detective & Accomplice Living-Player Picker (Reveals Player's Floor Only) */}
       {needsPlayerPickerAtNight && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-[#E8C984]">
@@ -520,9 +587,9 @@ export default function App() {
         </div>
       )}
 
-      {isAlive && intel?.nightActionSubmitted && (
+      {isAlive && !isNightReview && intel?.nightActionSubmitted && !intel?.latestNightResult && (
         <p className="text-xs font-semibold text-[#34D399]">
-          ✓ ส่งคำสั่งกลางคืนเรียบร้อยแล้ว — กำลังรอผู้เล่นบทบาทอื่นหรือครบเวลา...
+          ✓ ส่งคำสั่งกลางคืนเรียบร้อยแล้ว — กำลังรอผู้เล่นบทบาทอื่นสรุปผลสกิลคืนนี้...
         </p>
       )}
     </section>
@@ -534,6 +601,7 @@ export default function App() {
         intel={intel}
         myPlayerId={myPlayerId}
         alivePlayers={alivePlayers}
+        totalFloors={totalFloors}
         pingModeActive={accomplicePingMode}
         onTogglePingMode={() => {
           const next = !accomplicePingMode;
@@ -546,7 +614,7 @@ export default function App() {
       />
     ) : null;
 
-  // 3-Mode Day Vote Banner (Shown during VOTE phase right above the 7-floor grid)
+  // Progressive Day Vote Banner (Day 1: Room, Day 2: Room + Floor, Day 3+: Room + Floor + Column)
   const roomVoteBannerBlock = isVote ? (
     <section className="rounded-xl border border-[#7F1D1D] bg-[#241015]/95 p-4 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -554,16 +622,20 @@ export default function App() {
           <Vote className="h-5 w-5 text-[#F87171] shrink-0" />
           <div>
             <h2 className="font-display text-base sm:text-lg font-bold text-[#F8F3EE]">
-              {roomState.day >= 2
+              {roomState.day >= 3
                 ? 'โหวต 3 รูปแบบ: เปิด 1 ห้อง / ปิดตายทั้งชั้น / ปิดตายทั้งแถวแนวตั้ง'
-                : 'โหวตวันที่ 1: เลือกเปิด 1 ห้อง (Room Vote)'}
+                : roomState.day === 2
+                  ? 'โหวตวันที่ 2: เปิด 1 ห้อง หรือ ปิดตายทั้งชั้นแนวนอน'
+                  : 'โหวตวันที่ 1: เลือกเปิด 1 ห้อง (Room Vote)'}
             </h2>
             <p className="text-xs text-[#E5C6C9]">
-              {roomState.day >= 2
-                ? `เลือกบนแผนผังด้านล่างได้เลย (เสียงสูงสุดชนะ) — การปิดตายชั้นหรือแถวจะกำจัดทุกคนในแนวนั้นทันที!${
+              {roomState.day >= 3
+                ? `ปลดล็อกครบทั้ง 3 รูปแบบแล้ว (เสียงสูงสุดชนะ) — การปิดตายชั้นหรือแถวจะกำจัดทุกคนในแนวนั้นทันที!${
                     roomState.day === roomState.maxDays ? ' (วันสุดท้ายแล้ว!)' : ''
                   }`
-                : 'วันแรกเลือกจิ้มเปิดได้เฉพาะรายห้องบนแผนผัง — โหวตปิดตายทั้งชั้น/ทั้งแถวจะปลดล็อกตั้งแต่วันที่ 2 หลังได้เบาะแสจากแม่บ้านและช่างเช็ดกระจก'}
+                : roomState.day === 2
+                  ? 'ปลดล็อกโหวตปิดตายทั้งชั้นแนวนอนแล้ว! (โหวตปิดตายทั้งแถวแนวตั้งจะปลดล็อกในวันที่ 3)'
+                  : 'วันที่ 1 โหวตเปิดได้เฉพาะรายห้อง — ปิดตายทั้งชั้นปลดล็อกวันที่ 2 และปิดตายทั้งแถวแนวตั้งปลดล็อกวันที่ 3'}
             </p>
           </div>
         </div>
@@ -680,9 +752,7 @@ export default function App() {
                         'ห้องพัก: ??? (ความลับ)'
                       )
                     ) : (
-                      `${p.revealedRole ? ROLE_DEFINITIONS[p.revealedRole].nameTh : 'ผู้ตาย'} · ห้อง ${
-                        p.deathRoom ?? '?'
-                      } (${p.deathCause === 'LYNCHED' ? 'ถูกโหวตออก' : 'ถูกฆ่า'})`
+                      `เสียชีวิตแล้ว (DEAD) · ห้อง ${p.deathRoom ?? '?'} (ไม่เปิดเผยบทบาท)`
                     )}
                   </p>
                 </div>
@@ -728,9 +798,11 @@ export default function App() {
     <div className="border-t border-[#2E252A] bg-[#171219] p-3.5 space-y-2.5 shrink-0">
       <div className="flex items-center justify-between text-xs">
         <span className="text-[#CFC8BF]">
-          {roomState.day >= 2
-            ? 'กดพร้อมครบ 100% เพื่อเข้าช่วงโหวต 3 รูปแบบ'
-            : 'กดพร้อมครบ 100% เพื่อเข้าช่วงโหวตเปิดห้อง (วันที่ 1)'}
+          {roomState.day >= 3
+            ? 'กดพร้อมครบ 100% เพื่อเข้าช่วงโหวต 3 รูปแบบ (ห้อง/ชั้น/แถว)'
+            : roomState.day === 2
+              ? 'กดพร้อมครบ 100% เพื่อเข้าช่วงโหวตห้อง หรือ ปิดตายทั้งชั้น (วันที่ 2)'
+              : 'กดพร้อมครบ 100% เพื่อเข้าช่วงโหวตเปิดห้อง (วันที่ 1)'}
         </span>
         <span className="font-mono-tabular font-semibold text-[#34D399]">
           พร้อมโหวต {roomState.readyCount}/{roomState.aliveCount} คน
@@ -968,10 +1040,11 @@ export default function App() {
           {/* Night Action Guidance / Detective & Accomplice Player Picker */}
           {nightActionBlock}
 
-          {/* 7-Floor × 3-Column Interactive Hotel Map */}
+          {/* Dynamic Floor × 3-Column Interactive Hotel Map */}
           <HotelFloorplan
             phase={roomState.phase}
             day={roomState.day}
+            totalFloors={totalFloors}
             revealedRooms={roomState.revealedRooms}
             lockedFloors={roomState.lockedFloors}
             lockedColumns={roomState.lockedColumns}
@@ -986,6 +1059,13 @@ export default function App() {
             onNightSelectColumn={(col) => handleNightAction(col)}
             onAccomplicePingRoom={handleAccomplicePingRoom}
           />
+
+          {/* Desktop Inline Personal Skill Log (My Investigation Log) */}
+          {intel && (
+            <div className="hidden lg:block">
+              <InvestigationLogBox intel={intel} collapsible />
+            </div>
+          )}
 
           {/* Mobile quick Ready button on Map tab during Day */}
           <div className="lg:hidden rounded-xl overflow-hidden border border-[#2E252A]">
@@ -1133,7 +1213,7 @@ export default function App() {
           }`}
         >
           <Building2 className="h-4 w-4" />
-          <span>แผนผัง 7 ชั้น</span>
+          <span>แผนผัง {totalFloors} ชั้น</span>
         </button>
 
         <button
@@ -1165,8 +1245,13 @@ export default function App() {
               : 'text-[#9D948A]'
           }`}
         >
-          <IdCard className="h-4 w-4" />
-          <span>บทบาท / สกิล</span>
+          <div className="relative">
+            <IdCard className="h-4 w-4" />
+            {isNight && intel?.latestNightResult && !intel?.nightAcknowledged && (
+              <span className="absolute -right-1.5 -top-1 h-2.5 w-2.5 rounded-full bg-[#F87171]" />
+            )}
+          </div>
+          <span>บทบาท / เบาะแส</span>
         </button>
       </nav>
     </div>

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { RoomStatePayload, RoleId } from '../shared/gameTypes';
 import {
+  getFloorCountForPlayerCount,
   getMaxDaysForPlayerCount,
   getRoleDistribution,
   ROLE_DEFINITIONS,
@@ -240,7 +241,8 @@ export function LobbyView({
                   <div className="flex items-center justify-between text-xs text-[#BDB5AC] mb-1.5">
                     <span>จำนวนผู้เล่นทั้งหมด (เติมบอท AI อัตโนมัติ)</span>
                     <span className="font-mono-tabular text-[#C8A25A] font-semibold">
-                      {createMaxPlayers} คน · จำกัด {createMaxDays} วัน
+                      {getFloorCountForPlayerCount(createMaxPlayers)} ชั้น (
+                      {getFloorCountForPlayerCount(createMaxPlayers) * 3} ห้อง) · {createMaxDays} วัน
                     </span>
                   </div>
                   <div className="grid grid-cols-4 gap-2">
@@ -292,7 +294,7 @@ export function LobbyView({
             </form>
 
             <p className="text-xs text-[#8E867D] tracking-wide">
-              7 ชั้น × 3 แถวตั้ง · ห้ามย้ายห้องตลอดเกม · 8 บทบาท 3 ฝ่าย (คนดี / ฆาตกร / คนเมา)
+              จำนวนชั้น = จำนวนผู้เล่น − 1 · ห้ามย้ายห้องตลอดเกม · ไม่เปิดเผยบทบาทคนตายจนจบเกม
             </p>
           </div>
         </main>
@@ -434,11 +436,12 @@ export function LobbyView({
                   ตั้งค่าจำนวนผู้เล่น (5–8 คน)
                 </h2>
                 <span className="font-mono-tabular text-xs font-semibold text-[#E8C984]">
-                  จำกัด {maxDays} วัน
+                  {getFloorCountForPlayerCount(roomState.maxPlayers)} ชั้น · จำกัด {maxDays} วัน
                 </span>
               </div>
               <p className="mt-1 text-xs text-[#9D948A]">
-                5–6 คน เล่นสูงสุด 3 วัน · 7–8 คน เล่นสูงสุด 4 วัน · เปิดห้องพบศพตั้งต้น 3 ห้อง
+                จำนวนชั้น = ผู้เล่น − 1 ({getFloorCountForPlayerCount(roomState.maxPlayers)} ชั้น × 3 ห้อง ={' '}
+                {getFloorCountForPlayerCount(roomState.maxPlayers) * 3} ห้อง) · เปิดศพตั้งต้น 3 ห้อง
               </p>
 
               <div className="mt-3 grid grid-cols-4 gap-2">

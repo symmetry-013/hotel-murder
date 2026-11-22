@@ -17,85 +17,243 @@ import type {
 import {
   getColumnOfRoom,
   getFloorOfRoom,
+  getFloorsForCount,
+  getRoomsForFloorCount,
   getRoomsInColumn,
   getRoomsOnFloor,
   HOTEL_COLUMNS,
-  HOTEL_FLOORS,
-  HOTEL_ROOMS,
   ROLE_DEFINITIONS,
 } from '../src/shared/gameTypes.ts';
 
 export type ProviderChoice = 'groq' | 'gemini' | 'fallback';
 
+export interface BotPersonaTemplate {
+  code: string;
+  gender: 'M' | 'F';
+  archetype: string;
+  persona: string;
+  speechStyle: string;
+  avatarColor: string;
+}
+
 export interface BotProfile {
   id: string;
   name: string;
+  gender: 'M' | 'F';
+  archetype: string;
   persona: string;
+  speechStyle: string;
   preferredProvider: 'groq' | 'gemini';
   avatarColor: string;
 }
 
-export const BOT_POOL: Array<Omit<BotProfile, 'id' | 'preferredProvider'>> = [
+/**
+ * 8 Distinct AI Personas (4 Male, 4 Female)
+ */
+export const BOT_PERSONAS: BotPersonaTemplate[] = [
   {
-    name: 'บอส',
-    persona: 'ปากแจ๋ว ชอบคำนวณแถวแนวตั้ง-แนวนอน เสนอปิดตายทั้งชั้นหรือทั้งแถวแบบใจถึง',
+    code: 'M1',
+    gender: 'M',
+    archetype: 'ชาย 1 · สายบวกหัวร้อน',
+    persona: 'ใจร้อน ชอบเปิดก่อน ใครพูดไม่เข้าหูโหวตทันที พูดจาโผงผาง กู-มึง ไอ้สัส',
+    speechStyle: 'โผงผาง ใจร้อน ท้าชนทันที ใช้คำแรงแบบเพื่อนซี้ เช่น ไอ้สัส เฮ้ย เปิดเลยดิ',
     avatarColor: '#B84A39',
   },
   {
-    name: 'เฟิร์น',
-    persona: 'สายปั่นตัวแม่ ชอบบลัฟตัวเลขชั้น/แถวและแซวเพื่อนแรงเวลาใครพูดไม่ตรง',
-    avatarColor: '#9B4D6F',
-  },
-  {
-    name: 'เจมส์',
-    persona: 'ใจร้อน พูดตรง ขี้โวยวาย ชอบชวนปิดตายชั้นหรือแถวที่สงสัยเลยทันที',
+    code: 'M2',
+    gender: 'M',
+    archetype: 'ชาย 2 · สายเนิร์ดวิเคราะห์',
+    persona: 'ชอบจดสถิติ คำนวณความน่าจะเป็น พูดจามีเหตุผลแต่แอบกวนตีน',
+    speechStyle: 'ไล่เลขชั้น ไล่สถิติ ตัดช้อยส์เป็นเปอร์เซ็นต์ แต่แอบแซะเพื่อนแบบกวนตีนหน้านิ่ง',
     avatarColor: '#4A6FA5',
   },
   {
-    name: 'แพรว',
-    persona: 'ช่างสังเกต กวนตีนแบบหน้านิ่ง จับผิดคำให้การเรื่องชั้นเก่ง',
-    avatarColor: '#5B8A72',
-  },
-  {
-    name: 'ต้น',
-    persona: 'สายฮาขี้โวยวาย ชอบโยนเลขห้องมั่วๆ หรือยุให้ปิดแถวแนวตั้งไปเลย',
+    code: 'M3',
+    gender: 'M',
+    archetype: 'ชาย 3 · สายปั่นกวนประสาท',
+    persona: 'ชอบพูดจาคลุมเครือ บลัฟเก่ง หลอกล่อให้คนอื่นระแวงกันเอง',
+    speechStyle: 'พูดกำกวม ยุให้คนอื่นตีกันเอง ชอบโยนเหยื่อล่อแล้วขำแห้งๆ',
     avatarColor: '#B8863B',
   },
   {
-    name: 'แนท',
-    persona: 'นิ่งๆ แต่เชือดนิ่ม ชอบไล่ตัดช้อยส์ห้องว่างกับเบาะแสแม่บ้านและช่างเช็ดกระจก',
+    code: 'M4',
+    gender: 'M',
+    archetype: 'ชาย 4 · สายนิ่งขรึมสังเกตการณ์',
+    persona: 'พูดน้อยต่อยหนัก มักรอให้คนอื่นเถียงกันเสร็จแล้วค่อยสรุปจี้จุดตาย',
+    speechStyle: 'สั้น นิ่ง เฉียบ คม จี้ตรงจุดที่คนอื่นพลาดแค่ประโยคเดียวจบ',
+    avatarColor: '#5B6D7A',
+  },
+  {
+    code: 'F1',
+    gender: 'F',
+    archetype: 'หญิง 1 · สายแซ่บปากแจ๋ว',
+    persona: 'ปากไว ด่าเจ็บ จับพิรุธเก่ง ใครโกหกโดนจี้จนไปไม่เป็น',
+    speechStyle: 'ปากไว ฟาดไม่ยั้ง จับโป๊ะคำพูดเพื่อนแรงๆ แบบตัวแม่วงเหล้า',
+    avatarColor: '#A63A5B',
+  },
+  {
+    code: 'F2',
+    gender: 'F',
+    archetype: 'หญิง 2 · สายแอ๊บใสขี้ระแวง',
+    persona: 'ทำตัวเหมือนคนขี้กลัว ชอบถามคนอื่นไปทั่ว แต่แอบเก็บข้อมูลเก่ง',
+    speechStyle: 'ทำเสียงตื่นกลัว ถามจี้ทีละคนว่าอยู่ชั้นไหน แต่แอบจำทุกคำตอบไว้เชือดทีหลัง',
     avatarColor: '#7A5C99',
   },
   {
-    name: 'มายด์',
-    persona: 'ขี้ระแวง ชอบจับพิรุธคนที่รีบเบี่ยงประเด็นเวลาจะโหวตปิดชั้น',
+    code: 'F3',
+    gender: 'F',
+    archetype: 'หญิง 3 · สายลุยเจ้าแผนการ',
+    persona: 'ชอบเป็นผู้นำ สั่งการให้คนอื่นเปิดข้อมูลและคุมจังหวะการโหวต',
+    speechStyle: 'สั่งการชัดเจน คุมเกม บอกให้ทุกคนเปิดเบาะแสแล้วนัดโหวตไปทางเดียวกัน',
     avatarColor: '#3D828A',
   },
   {
-    name: 'เบียร์',
-    persona: 'สายมึนเหมือนเพิ่งสร่างเมา ชอบขิงและแซวเพื่อนในวงเหล้า',
+    code: 'F4',
+    gender: 'F',
+    archetype: 'หญิง 4 · สายติสท์เดาใจยาก',
+    persona: 'พูดจาแปลกๆ เหมือนเมาตลอดเวลา ทำให้คนเดาไม่ออกว่าเป็นคนเมาหรือคนดี',
+    speechStyle: 'พูดเพี้ยนๆ เหมือนคนเมา ล่องลอย ชวนสับสนจนคนอื่นไม่กล้าฟันธงว่าเป็นคนเมาหรือคนดี',
     avatarColor: '#8C6239',
   },
 ];
 
-const CORE_PERSONA_INSTRUCTION = `คุณกำลังเล่นบอร์ดเกมสืบสวนฆาตกรรม "HOTEL MURDER ปริศนาโรงแรมมรณะ" (โรงแรม 7 ชั้น × 3 แถวแนวตั้ง ห้อง 101-703, ห้ามย้ายห้องตลอดเกม) กับกลุ่มเพื่อนซี้ในวงเหล้า
-กติกาโหวตช่วงกลางวัน (คะแนนสูงสุดชนะ):
-- วันที่ 1: โหวตได้เฉพาะ "เปิด 1 ห้อง" (ยังปิดชั้น/ปิดแถวไม่ได้ ต้องรอเบาะแสจากแม่บ้าน/ช่างเช็ดกระจกคืนแรกก่อน!)
-- ตั้งแต่วันที่ 2 เป็นต้นไป ปลดล็อกครบ 3 รูปแบบ:
-  1) โหวตเปิด 1 ห้อง (เช่น ห้อง 302)
-  2) โหวตปิดตายทั้งชั้นแนวนอน (เช่น ปิดชั้น 4 -> ห้อง 401, 402, 403 โดนปิดตายและกำจัดทุกคนในชั้นนั้นทันที!)
-  3) โหวตปิดตายทั้งแถวแนวตั้ง (เช่น ปิดแถว 2 -> ห้อง 102-702 โดนปิดตายและกำจัดทุกคนในแถวนั้นทันที!)
-* ถ้าปิดชั้น/ปิดแถวแล้วโดน "ฆาตกร" -> ฝ่ายผู้บริสุทธิ์ชนะทันที!
-* ถ้าปิดแล้วโดน "คนเมา" (โดยไม่มีฆาตกร) -> คนเมาชนะเดี่ยวทันที!
+const MALE_THAI_NICKNAMES = [
+  'เจมส์',
+  'บอส',
+  'โอ๊ต',
+  'นนท์',
+  'บีม',
+  'เต้',
+  'ภูมิ',
+  'กอล์ฟ',
+  'แบงค์',
+  'วิน',
+  'พีท',
+  'นิว',
+  'แชมป์',
+  'มาร์ค',
+  'เคน',
+  'ต้น',
+  'ไนท์',
+  'เบียร์',
+  'ท็อป',
+  'เอิร์ธ',
+  'พอร์ช',
+  'กันต์',
+  'ซัน',
+  'แทน',
+];
 
-กฎการพูด (บังคับเด็ดขาด):
-1. ใช้ภาษาไทยแบบภาษาปากเพื่อนสนิทสุดๆ พูด "กู-มึง" แซวแรงๆ ได้เป็นธรรมชาติ เช่น "ไอ้เหี้ย", "ไอ้สัส", "เนียนสัส", "อย่ามาตอแหล", "โคตรมีพิรุธ"
-2. ห้ามพูดจาสุภาพเด็ดขาด! ห้ามลงท้ายว่า "ครับ", "ค่ะ", "นะครับ", "นะคะ", "ครับผม", "คุณ", "ผม", "ดิฉัน"
-3. พิมพ์สั้น กระชับ 1-2 ประโยค ไม่เกิน 165 ตัวอักษร เหมือนพิมพ์แชทสดๆ ห้ามขึ้นต้นด้วยชื่อตัวเอง ห้ามใส่เครื่องหมายคำพูดครอบประโยค
-4. กลยุทธ์ตามบทบาท:
-   - ฝ่ายผู้บริสุทธิ์: ถ้าได้เบาะแสจากแม่บ้าน/ช่างเช็ดกระจก/นักสืบ/พยาน ว่าชั้นไหนหรือแถวไหนมีคนกระจุกตัวหรือมีฆาตกร ให้กล้าเสนอโหวต "ปิดตายชั้น X" หรือ "ปิดตายแถว Y" เพื่อกวาดล้างได้เลย!
-   - ฝ่ายฆาตกร (ฆาตกร/ผู้ช่วยฆาตกร): ถ้ารู้ตัวว่าคนกำลังจะโหวตปิดตาย "ชั้น" หรือ "แถวแนวตั้ง" ที่ฆาตกรหรือตัวเองอยู่ ให้รีบปั่นแชทเบี่ยงความสนใจไปยุให้โหวตปิดชั้นอื่น แถวอื่น หรือเปิดห้องอื่นแทนทันที!
-   - คนเมา (Drunk): ปั่นแชททำตัวมีพิรุธหรือแกล้งหลุดชั้น/แถวของตัวเอง เพื่อล่อให้คนอื่นโหวตเปิดห้องหรือปิดชั้น/ปิดแถวที่มีมึงอยู่!`;
+const FEMALE_THAI_NICKNAMES = [
+  'แพรว',
+  'มายด์',
+  'น้ำหวาน',
+  'ฝ้าย',
+  'เฟิร์น',
+  'แนท',
+  'พลอย',
+  'มิ้นท์',
+  'เมย์',
+  'เบสท์',
+  'กิ๊ฟ',
+  'อาย',
+  'ข้าวฟ่าง',
+  'น้ำผึ้ง',
+  'เกรซ',
+  'พิม',
+  'ใบเฟิร์น',
+  'จูน',
+  'นุ่น',
+  'บิว',
+  'แจน',
+  'ฟ้า',
+  'ปุ๊ก',
+  'ไอซ์',
+];
+
+function shuffleArray<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+/**
+ * Picks distinct personas (balanced M/F) and fresh random Thai nicknames that:
+ * 1) Never duplicate any human player name in the room
+ * 2) Never repeat any bot name used in the previous round
+ */
+export function createRoundBotProfiles(
+  count: number,
+  excludeHumanNames: Set<string>,
+  previousRoundBotNames: Set<string>,
+  idGenerator: () => string
+): BotProfile[] {
+  const malePersonas = shuffleArray(BOT_PERSONAS.filter((p) => p.gender === 'M'));
+  const femalePersonas = shuffleArray(BOT_PERSONAS.filter((p) => p.gender === 'F'));
+
+  // Interleave M and F randomly so every room has a balanced male/female mix
+  const startWithMale = Math.random() < 0.5;
+  const interleaved: BotPersonaTemplate[] = [];
+  for (let i = 0; i < 4; i++) {
+    if (startWithMale) {
+      if (malePersonas[i]) interleaved.push(malePersonas[i]);
+      if (femalePersonas[i]) interleaved.push(femalePersonas[i]);
+    } else {
+      if (femalePersonas[i]) interleaved.push(femalePersonas[i]);
+      if (malePersonas[i]) interleaved.push(malePersonas[i]);
+    }
+  }
+
+  const chosenPersonas = interleaved.slice(0, count);
+  const usedNamesLower = new Set<string>(Array.from(excludeHumanNames).map((n) => n.toLowerCase()));
+  const prevLower = new Set<string>(Array.from(previousRoundBotNames).map((n) => n.toLowerCase()));
+
+  const pickFreshName = (gender: 'M' | 'F', index: number): string => {
+    const basePool = gender === 'M' ? MALE_THAI_NICKNAMES : FEMALE_THAI_NICKNAMES;
+    const preferred = shuffleArray(basePool).filter(
+      (n) => !usedNamesLower.has(n.toLowerCase()) && !prevLower.has(n.toLowerCase())
+    );
+    const fallback = shuffleArray(basePool).filter((n) => !usedNamesLower.has(n.toLowerCase()));
+    const picked = preferred[0] ?? fallback[0] ?? (gender === 'M' ? `บอล${index + 1}` : `มุก${index + 1}`);
+    usedNamesLower.add(picked.toLowerCase());
+    return picked;
+  };
+
+  return chosenPersonas.map((template, idx) => ({
+    id: idGenerator(),
+    name: pickFreshName(template.gender, idx),
+    gender: template.gender,
+    archetype: template.archetype,
+    persona: template.persona,
+    speechStyle: template.speechStyle,
+    preferredProvider: idx % 2 === 0 ? 'groq' : 'gemini',
+    avatarColor: template.avatarColor,
+  }));
+}
+
+const CORE_PERSONA_INSTRUCTION = `คุณกำลังเล่นบอร์ดเกมสืบสวนฆาตกรรม "HOTEL MURDER ปริศนาโรงแรมมรณะ" (โรงแรมมีจำนวนชั้น = จำนวนผู้เล่น - 1 ชั้น × 3 แถวแนวตั้ง, ห้ามย้ายห้องตลอดเกม) กับกลุ่มเพื่อนซี้ในวงเหล้า
+
+กฎเหล็กที่ต้องรู้เสมอ:
+1. เมื่อมีคนตาย (ไม่ว่าโดนฆ่ากลางคืนหรือโดนโหวตกลางวัน) จะ **ไม่เปิดเผยบทบาทของผู้ตาย** จนกว่าจะจบเกม! (รู้แค่ชื่อกับเลขห้องที่พบศพ) ห้ามเดาเหมือนรู้บทบาทคนตาย!
+2. ระบบปลดล็อกโหวตช่วงกลางวันแบบขั้นบันได (คะแนนสูงสุดชนะ):
+   - วันที่ 1 (Day 1): โหวตได้เฉพาะ "เปิด 1 ห้อง (รายห้อง)" เท่านั้น! (ห้ามเสนอปิดชั้นหรือปิดแถวในวันที่ 1 เพราะยังไม่ปลดล็อก!)
+   - วันที่ 2 (Day 2): ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน (Horizontal Floor)" (ยังปิดแถวแนวตั้งไม่ได้ ต้องรอวันที่ 3!)
+   - วันที่ 3 และ วันที่ 4 (Day 3 - Day 4): ปลดล็อกเต็มรูปแบบ โหวตได้ครบทั้ง 3 แบบ คือ "รายห้อง", "ปิดตาย 1 ชั้นแนวนอน", และ "ปิดตาย 1 แถวแนวตั้ง (Vertical Column)"!
+   * ถ้าปิดพื้นที่แล้วโดน "ฆาตกร" -> ฝ่ายผู้บริสุทธิ์ชนะทันที!
+   * ถ้าปิดพื้นที่แล้วโดน "คนเมา" (โดยไม่มีฆาตกร) -> คนเมาชนะเดี่ยวทันที!
+
+กฎการพูดและการสวมบทบาท (บังคับเด็ดขาด):
+1. คิดวิเคราะห์เองอย่างอิสระจากประวัติแชทล่าสุด + เบาะแสสกิลส่วนตัว + นิสัยประจำตัวของมึง ห้ามใช้ประโยคซ้ำซากหรือพูดเหมือนหุ่นยนต์
+2. ใช้ภาษาไทยแบบภาษาปากเพื่อนสนิท กู-มึง แซว/จี้/โต้เถียงกันตรงไปตรงมาตามบุคลิกของตัวละครมึง
+3. ห้ามพูดจาสุภาพเด็ดขาด! ห้ามลงท้ายว่า "ครับ", "ค่ะ", "นะครับ", "นะคะ", "ครับผม", "คุณ", "ผม", "ดิฉัน"
+4. พิมพ์สั้น กระชับ 1-2 ประโยค ไม่เกิน 170 ตัวอักษร เหมือนพิมพ์แชทสดๆ ห้ามขึ้นต้นด้วยชื่อตัวเอง ห้ามใส่เครื่องหมายคำพูดครอบประโยค
+5. กลยุทธ์ตามบทบาท:
+   - ฝ่ายผู้บริสุทธิ์: เอาเบาะแสจริงจากสกิล (แม่บ้าน/ช่างเช็ดกระจก/นักสืบ/พยาน) มาเทียบกับคำพูดเพื่อนในแชทเพื่อหาห้องฆาตกร
+   - ฝ่ายฆาตกร (ฆาตกร/ผู้ช่วยฆาตกร): ปั่นเบี่ยงประเด็นถ้าคนกำลังเล็งห้อง/ชั้น/แถวของทีมตัวเอง แต่อย่าทำตัวล่กเกินไป
+   - คนเมา (Drunk): ปั่นแชทหรือหลุดเบาะแสห้อง/ชั้น/แถวตัวเองแบบเนียนๆ เพื่อล่อให้คนอื่นโหวตโดนห้อง/ชั้น/แถวของมึง!`;
 
 let geminiClient: GoogleGenAI | null = null;
 
@@ -314,6 +472,7 @@ export interface BotChatInput {
   myRoom: HotelRoomNumber;
   myFloor: HotelFloorNumber;
   myColumn: HotelColumnNumber;
+  totalFloors: number;
   phase: GamePhase;
   day: number;
   maxDays: number;
@@ -329,90 +488,72 @@ export interface BotChatInput {
   lastHumanMessage?: { senderName: string; text: string };
 }
 
-function buildFallbackChat(input: BotChatInput): string {
+function buildEmergencyOfflineChat(input: BotChatInput): string {
+  const activeRooms = getRoomsForFloorCount(input.totalFloors);
+  const activeFloors = getFloorsForCount(input.totalFloors);
   const revealedSet = new Set(input.revealedRooms.map((r) => r.room));
-  const unrevealed = HOTEL_ROOMS.filter((r) => !revealedSet.has(r) && r !== input.myRoom);
-  const sampleRoom = unrevealed[Math.floor(Math.random() * Math.max(1, unrevealed.length))] ?? 302;
-  const openFloors = HOTEL_FLOORS.filter((f) => !input.lockedFloors.includes(f));
+  const unrevealed = activeRooms.filter((r) => !revealedSet.has(r) && r !== input.myRoom);
+  const sampleRoom = unrevealed[Math.floor(Math.random() * Math.max(1, unrevealed.length))] ?? activeRooms[0];
+  const openFloors = activeFloors.filter((f) => !input.lockedFloors.includes(f));
   const openCols = HOTEL_COLUMNS.filter((c) => !input.lockedColumns.includes(c));
   const latestClue = input.privateClues[input.privateClues.length - 1];
 
-  const canAreaLockdown = input.day >= 2;
+  const canFloorLock = input.day >= 2;
+  const canColLock = input.day >= 3;
+  const otherFloor = openFloors.find((f) => f !== input.myFloor) ?? openFloors[0] ?? 2;
+  const otherCol = openCols.find((c) => c !== input.myColumn) ?? openCols[0] ?? 2;
 
-  // Drunk tries to bait people into voting its own room (and floor/column from Day 2+)!
   if (input.role === 'DRUNK') {
-    const baitLines = canAreaLockdown
-      ? [
-          `เฮ้ยอย่ามาปิดชั้น ${input.myFloor} นะสัส! กูอยู่เงียบๆ ไม่มีพิรุธอะไรเลย อย่ามามั่วปิดชั้นนี้!`,
-          `ใครกล้าโหวตห้อง ${input.myRoom} หรือปิดแถว ${input.myColumn} มึงโดนกูด่าแน่ กูไม่ใช่ฆาตกรโว้ย!`,
-          `อย่าไปปิดตายชั้น ${input.myFloor} เด็ดขาด กูเตือนแล้วนะ... เอ้ย ไม่มีอะไร กูแค่พูดเฉยๆ!`,
-        ]
-      : [
-          `เฮ้ยใครกล้าโหวตเปิดห้อง ${input.myRoom} มึงโดนกูด่าแน่! กูแค่คนธรรมดา ไม่มีพิรุธอะไรเลยโว้ย!`,
-          `อย่ามามองแถวชั้น ${input.myFloor} นะสัส กูไม่ได้เป็นฆาตกรโว้ย อย่าโหวตห้อง ${input.myRoom} เด็ดขาด!`,
-        ];
-    return baitLines[Math.floor(Math.random() * baitLines.length)];
+    if (canColLock) {
+      return `อย่ามายุ่งกับห้อง ${input.myRoom} หรือปิดแถว ${input.myColumn} นะโว้ย กูอยู่เงียบๆ ของกูดีๆ`;
+    }
+    if (canFloorLock) {
+      return `เฮ้ยอย่ามาปิดชั้น ${input.myFloor} นะเว้ย กูไม่ได้ทำอะไรผิดเลย อย่าโหวตโดนชั้นนี้เด็ดขาด`;
+    }
+    return `ใครกล้าเปิดห้อง ${input.myRoom} มึงมีเรื่องกับกูแน่ กูแค่แขกธรรมดาโว้ย`;
   }
 
-  // Good role with a fresh Housekeeper / Glazier clue proposes Floor/Column Lockdown (Day 2+)!
   if (ROLE_DEFINITIONS[input.role].faction === 'GOOD' && latestClue) {
-    if (canAreaLockdown && latestClue.category === 'HOUSEKEEPER') {
-      return `เฮ้ยพวกมึง กูแม่บ้าน! ${latestClue.detail} — ถ้าสงสัยชั้นนี้โหวต "ปิดตายทั้งชั้น" กวาดล้างไปเลยมั้ยไอ้สัส!`;
+    if (canColLock && latestClue.category === 'GLAZIER') {
+      return `${latestClue.detail} — วันนี้ปลดปิดแถวแล้ว ตัดใจโหวตปิดแถวเลยมั้ยพวกมึง`;
     }
-    if (canAreaLockdown && latestClue.category === 'GLAZIER') {
-      return `เฮ้ยพวกมึง กูช่างเช็ดกระจก! ${latestClue.detail} — ตัดใจโหวต "ปิดตายทั้งแถวแนวตั้ง" เลยดีป่ะ!`;
+    if (canFloorLock && latestClue.category === 'HOUSEKEEPER') {
+      return `${latestClue.detail} — วันนี้ปิดชั้นแนวนอนได้แล้วนะเว้ย ลองดูมั้ยว่าจะกวาดชั้นไหน`;
     }
-    return `เฮ้ยพวกมึง กูได้เบาะแสมาว่ะ! ${latestClue.detail} — ช่วยกันตัดช้อยส์เลยไอ้สัส!`;
+    return `เบาะแสคืนล่าสุดของกู: ${latestClue.detail} ลองเทียบกับแชทเมื่อกี้ดูดิ`;
   }
 
-  // Evil detects threat to own floor/column in chat and aggressively deflects!
   if (ROLE_DEFINITIONS[input.role].faction === 'EVIL') {
-    const otherFloor = openFloors.find((f) => f !== input.myFloor) ?? 4;
-    const otherCol = openCols.find((c) => c !== input.myColumn) ?? 2;
-    if (!canAreaLockdown) {
-      return `วันแรกยังปิดชั้นปิดแถวไม่ได้นะเว้ย ลองโหวตเปิดห้อง ${sampleRoom} ตัดช้อยส์ไปก่อนดีกว่ามั้ยพวกมึง`;
-    }
     const recentText = input.recentChat.slice(-5).map((m) => m.text).join(' ');
-    const floorThreatened = recentText.includes(`ชั้น ${input.myFloor}`) || recentText.includes(`ชั้น${input.myFloor}`);
-    const colThreatened = recentText.includes(`แถว ${input.myColumn}`) || recentText.includes(`แถว${input.myColumn}`);
-
-    if (floorThreatened || colThreatened) {
-      return `ไอ้เหี้ย อย่าโง่ไปปิด${floorThreatened ? `ชั้น ${input.myFloor}` : `แถว ${input.myColumn}`}ดิ คนดีตายฟรีหมด! ไปปิดชั้น ${otherFloor} หรือแถว ${otherCol} ดีกว่าเยอะ!`;
+    const floorThreatened =
+      recentText.includes(`ชั้น ${input.myFloor}`) || recentText.includes(`ชั้น${input.myFloor}`);
+    const colThreatened =
+      recentText.includes(`แถว ${input.myColumn}`) || recentText.includes(`แถว${input.myColumn}`);
+    if (canFloorLock && floorThreatened) {
+      return `อย่าไปปิดชั้น ${input.myFloor} มั่วดิ เดี๋ยวคนดีตายฟรีหมด ไปดูชั้น ${otherFloor} ดีกว่าเยอะ`;
     }
-
-    const evilLines = [
-      `กูว่าปิดตายชั้น ${otherFloor} ไปเลยจบๆ ชั้นนั้นแม่มดูเงียบผิดปกติ เผลอๆ ฆาตกรซ่อนอยู่!`,
-      `เหลือเวลาแค่ ${input.maxDays - input.day + 1} วันแล้วไอ้สัส โหวตเปิดทีละห้องไม่ทันหรอก ปิดตายแถวแนวตั้ง ${otherCol} ไปเลยมั้ย!`,
-      `อย่ามัวแต่เดามั่วดิ ลองเปิดห้อง ${sampleRoom} หรือไม่ก็ปิดชั้น ${otherFloor} วัดใจไปเลยพวกมึง`,
-    ];
-    return evilLines[Math.floor(Math.random() * evilLines.length)];
+    if (canColLock && colThreatened) {
+      return `ปิดแถว ${input.myColumn} โคตรเสี่ยงเลยนะเว้ย ไปปิดแถว ${otherCol} หรือเปิดห้อง ${sampleRoom} แทนดิ`;
+    }
+    if (canColLock) return `เหลือเวลาน้อยแล้ว ลองปิดแถว ${otherCol} หรือปิดชั้น ${otherFloor} วัดใจไปเลยมั้ย`;
+    if (canFloorLock) return `วันนี้ปิดชั้นได้แล้ว ลองเช็กชั้น ${otherFloor} หรือเปิดห้อง ${sampleRoom} ดูดิ`;
+    return `วันแรกยังปิดชั้นไม่ได้ ลองโหวตเปิดห้อง ${sampleRoom} ตัดช้อยส์ดูก่อนมั้ยพวกมึง`;
   }
 
   if (input.lastHumanMessage) {
-    const speaker = input.lastHumanMessage.senderName;
-    if (!canAreaLockdown) {
-      return `โห ไอ้${speaker} มึงพูดงี้น่าสงสัยจัด วันแรกยังปิดชั้นไม่ได้ งั้นลองเปิดห้อง ${sampleRoom} ตัดช้อยส์ดูมั้ย`;
-    }
-    const otherFloor = openFloors.find((f) => f !== input.myFloor) ?? 3;
-    return `โห ไอ้${speaker} มึงพูดงี้น่าสงสัยจัด เหลือ ${input.maxDays - input.day + 1} วันเองนะเว้ย ปิดชั้น ${otherFloor} หรือเปิดห้อง ${sampleRoom} วัดใจเลยดีป่ะ`;
+    const target = input.lastHumanMessage.senderName;
+    return canFloorLock
+      ? `เดี๋ยวนะ ${target} พูดงี้ชักแปลกๆ ว่ะ มึงอยู่ชั้นไหนแน่ ลองเปิดห้อง ${sampleRoom} หรือปิดชั้น ${otherFloor} ดูมั้ย`
+      : `เดี๋ยวนะ ${target} พูดงี้โคตรมีพิรุธ วันแรกเปิดห้อง ${sampleRoom} ตัดช้อยส์ก่อนเลยมั้ย`;
   }
 
-  if (!canAreaLockdown) {
-    const day1Lines = [
-      `วันแรกยังปิดชั้นปิดแถวไม่ได้นะเว้ย ต้องรอเบาะแสแม่บ้านกับช่างเช็ดกระจกคืนนี้ก่อน ลองเปิดห้อง ${sampleRoom} ตัดช้อยส์มั้ย`,
-      `ตัดห้องศพตั้งต้นออกไปแล้ว 3 ห้อง วันนี้เปิดห้อง ${sampleRoom} ดูก่อน แล้วพรุ่งนี้ค่อยเอาเบาะแสแม่บ้านมาปิดชั้นกัน!`,
-    ];
-    return day1Lines[Math.floor(Math.random() * day1Lines.length)];
+  if (canColLock) {
+    return `วันที่ ${input.day} ปลดครบทั้งเปิดห้อง ปิดชั้น ปิดแถวแล้ว ใครมีเบาะแสแม่บ้าน/ช่างเช็ดกระจกรีบคายออกมาเลย`;
   }
-
-  const otherFloor = openFloors.find((f) => f !== input.myFloor) ?? 5;
-  const otherCol = openCols.find((c) => c !== input.myColumn) ?? 1;
-  const generalLines = [
-    `วันนี้ปลดล็อกโหวต 3 แบบแล้วนะเว้ย เปิดรายห้อง ปิดตายทั้งชั้น หรือปิดตายทั้งแถวแนวตั้ง! แม่บ้านกับช่างเช็ดกระจกรีบคายเบาะแสมา!`,
-    `เวลามีแค่ ${input.maxDays} วันนะไอ้สัส ถ้าแม่บ้านเจอชั้นคนกระจุกตัว กูว่าปิดตายชั้น ${otherFloor} กวาดไปเลยคุ้มกว่า!`,
-    `ถ้าไม่ชัวร์ห้องไหน ลองปิดตายแถวแนวตั้ง ${otherCol} หรือเปิดห้อง ${sampleRoom} ตัดช้อยส์ดูมั้ยพวกมึง`,
-  ];
-  return generalLines[Math.floor(Math.random() * generalLines.length)];
+  if (canFloorLock) {
+    return `วันที่ 2 ปิดชั้นแนวนอนได้แล้วนะเว้ย (ปิดแถวรอวันที่ 3) ใครได้เบาะแสชั้นไหนรีบแชร์ด่วน`;
+  }
+  return `วันแรกโหวตได้เฉพาะเปิดรายห้อง ลองตัดช้อยส์จากห้องศพตั้งต้นแล้วจิ้มห้อง ${sampleRoom} ดูมั้ย`;
 }
 
 export async function generateBotChat(
@@ -423,55 +564,63 @@ export async function generateBotChat(
     .filter((p) => p.alive)
     .map((p) => p.name)
     .join(', ');
+
+  // STRICT NO ROLE REVEAL ON DEATH: Bots only know dead players' name & room, NEVER their role!
   const revealedSummary = input.revealedRooms
     .map((r) =>
       r.kind === 'INITIAL_CRIME'
-        ? `${r.room}(ศพตั้งต้น)`
+        ? `${r.room}(ศพตั้งต้น-ว่าง)`
         : r.kind === 'EMPTY_LYNCHED'
           ? `${r.room}(ห้องว่าง)`
           : r.kind === 'LOCKED_EMPTY'
             ? `${r.room}(ปิดตาย-ว่าง)`
-            : `${r.room}(${r.occupantName}:${r.occupantRole ? ROLE_DEFINITIONS[r.occupantRole].nameTh : '?'})`
+            : `${r.room}(พบศพ ${r.occupantName ?? 'ผู้เล่น'}: เสียชีวิต-ไม่เปิดเผยบทบาท)`
     )
     .join(', ');
 
   const chatHistory = input.recentChat
-    .slice(-12)
+    .slice(-14)
     .map((m) => (m.isSystem ? `[ระบบ] ${m.text}` : `${m.senderName}: ${m.text}`))
     .join('\n');
 
   const clueStrings = input.privateClues
-    .slice(-5)
+    .slice(-6)
     .map((c) => `[คืน ${c.night} - ${c.title}] ${c.detail}`);
+
+  const voteUnlockNote =
+    input.day <= 1
+      ? 'วันที่ 1: โหวตได้เฉพาะ "เปิด 1 ห้อง (รายห้อง)" เท่านั้น! (ปิดชั้นปลดวันที่ 2, ปิดแถวปลดวันที่ 3)'
+      : input.day === 2
+        ? 'วันที่ 2: ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน" แล้ว! (ปิดแถวแนวตั้งยังไม่ปลด ต้องรอวันที่ 3)'
+        : `วันที่ ${input.day}: ปลดล็อกเต็มรูปแบบครบทั้ง 3 แบบแล้ว! ("เปิด 1 ห้อง" / "ปิดตาย 1 ชั้นแนวนอน" / "ปิดตาย 1 แถวแนวตั้ง")`;
 
   const roleMission =
     input.role === 'DRUNK'
-      ? `เป้าหมายลับของมึง (คนเมา): มึงต้องแกล้งทำตัวล่กหรือหลุดใบ้ชั้น ${input.myFloor} แถว ${input.myColumn} (ห้อง ${input.myRoom}) เพื่อให้เพื่อนโหวตเปิดห้อง ${input.myRoom} หรือโหวตปิดตายชั้น ${input.myFloor}/แถว ${input.myColumn} (ถ้าไม่มีฆาตกรโดนไปด้วย มึงชนะเดี่ยวทันที!)`
+      ? `เป้าหมายลับของมึง (คนเมา): มึงต้องปั่นหรือแกล้งหลุดข้อมูลชั้น ${input.myFloor} แถว ${input.myColumn} (ห้อง ${input.myRoom}) แบบเนียนๆ ให้เพื่อนโหวตโดนมึง (ถ้าไม่มีฆาตกรโดนไปด้วย มึงชนะเดี่ยวทันที!)`
       : roleDef.faction === 'EVIL'
-        ? `เป้าหมายลับของมึง (ฝ่ายฆาตกร): ห้องมึงอยู่ชั้น ${input.myFloor} แถว ${input.myColumn}! ถ้าเห็นเพื่อนคุยกันว่าจะโหวต "ปิดชั้น ${input.myFloor}" หรือ "ปิดแถว ${input.myColumn}" ให้รีบปั่นแชทเบี่ยงความสนใจไปโหวตปิดชั้นอื่นหรือแถวอื่นแทนทันที! เพื่อนร่วมฝ่าย: ${input.evilPartners.join(', ') || 'ไม่มี'}`
-        : `เป้าหมายลับของมึง (ฝ่ายผู้บริสุทธิ์): เอาเบาะแสจริง (แม่บ้าน/ช่างเช็ดกระจก/นักสืบ/พยาน) มาวิเคราะห์! ถ้าเบาะแสชี้ว่าชั้นไหนหรือแถวไหนมีคนกระจุกตัวหรือฆาตกรซ่อนอยู่ กล้าเสนอให้เพื่อนโหวต "ปิดตายชั้น X" หรือ "ปิดตายแถว Y" เพื่อกวาดล้างได้เลย (ระวังอย่าปิดโดนชั้น ${input.myFloor} แถว ${input.myColumn} ที่มึงอยู่เองนะเว้ย!)`;
+        ? `เป้าหมายลับของมึง (ฝ่ายฆาตกร): ห้องมึงอยู่ชั้น ${input.myFloor} แถว ${input.myColumn} เพื่อนร่วมฝ่ายคือ: ${input.evilPartners.join(', ') || 'ไม่มี'} — ถ้าเพื่อนเล็งห้อง/ชั้น/แถวของทีมมึง ให้เบี่ยงประเด็นแบบเนียนตามบุคลิกตัวเอง!`
+        : `เป้าหมายลับของมึง (ฝ่ายผู้บริสุทธิ์): เอาเบาะแสสกิลส่วนตัวมาวิเคราะห์ร่วมกับแชทเพื่อนเพื่อจับฆาตกร (ระวังอย่าพาเพื่อนโหวตปิดชั้น ${input.myFloor} หรือแถว ${input.myColumn} ที่มึงอยู่เอง!)`;
 
   const userPrompt = [
-    `ชื่อมึง: "${input.bot.name}" นิสัย: ${input.bot.persona}`,
-    `บทบาทลับ: "${roleDef.nameTh}" (${roleDef.nameEn}) | ห้องประจำตัวของมึง (ห้ามย้าย): ห้อง ${input.myRoom} (ชั้น ${input.myFloor}, แถวแนวตั้ง ${input.myColumn})`,
+    `ชื่อมึง: "${input.bot.name}" (${input.bot.archetype})`,
+    `บุคลิกเฉพาะตัวของมึง: ${input.bot.persona}`,
+    `สไตล์การพูดของมึง: ${input.bot.speechStyle}`,
+    `โรงแรมรอบนี้มีทั้งหมด ${input.totalFloors} ชั้น (ชั้น 1 ถึง ชั้น ${input.totalFloors}, ชั้นละ 3 ห้อง คือ x01, x02, x03)`,
+    `บทบาทลับของมึง: "${roleDef.nameTh}" (${roleDef.nameEn}) | ห้องประจำตัวถาวร: ห้อง ${input.myRoom} (ชั้น ${input.myFloor}, แถวแนวตั้ง ${input.myColumn})`,
     roleMission,
-    `ตอนนี้คือวันที่ ${input.day} จากทั้งหมด ${input.maxDays} วัน ${
-      input.day < 2
-        ? '(หมายเหตุสำคัญ: วันแรกยังโหวตปิดชั้น/ปิดแถวไม่ได้ โหวตได้เฉพาะเปิด 1 ห้อง ต้องรอเบาะแสแม่บ้าน/ช่างเช็ดกระจกในวันที่ 2!)'
-        : '(ปลดล็อกโหวตครบ 3 แบบแล้ว: เปิด 1 ห้อง / ปิดตายทั้งชั้น / ปิดตายทั้งแถวแนวตั้ง!)'
-    }`,
-    `ชั้นที่ถูกปิดตายไปแล้ว: ${input.lockedFloors.length > 0 ? input.lockedFloors.join(', ') : 'ยังไม่มี'} | แถวที่ถูกปิดตายไปแล้ว: ${input.lockedColumns.length > 0 ? input.lockedColumns.join(', ') : 'ยังไม่มี'}`,
+    `สถานะวันและกติกาโหวตวันนี้ (วันที่ ${input.day}/${input.maxDays}): ${voteUnlockNote}`,
+    `ชั้นที่ปิดตายไปแล้ว: ${input.lockedFloors.length > 0 ? input.lockedFloors.join(', ') : 'ยังไม่มี'} | แถวที่ปิดตายไปแล้ว: ${input.lockedColumns.length > 0 ? input.lockedColumns.join(', ') : 'ยังไม่มี'}`,
     input.morningHeadline ? `ข่าวเมื่อเช้า: ${input.morningHeadline}` : '',
     `ห้องที่เปิด/ปิดตายแล้ว: ${revealedSummary || 'ไม่มี'}`,
     `ผู้รอดชีวิต: ${aliveNames}`,
-    clueStrings.length > 0 ? `เบาะแสลับจากสกิลของมึง:\n${clueStrings.join('\n')}` : 'เบาะแสสกิล: ยังไม่มี',
-    chatHistory ? `แชทล่าสุด:\n${chatHistory}` : 'แชทล่าสุด: (ยังเงียบอยู่)',
+    clueStrings.length > 0 ? `สมุดบันทึกเบาะแสสกิลของมึง:\n${clueStrings.join('\n')}` : 'เบาะแสสกิล: ยังไม่มี',
+    chatHistory ? `ประวัติแชทล่าสุด:\n${chatHistory}` : 'ประวัติแชทล่าสุด: (ยังไม่มีใครพูด)',
     input.triggerReason === 'HUMAN_REPLY' && input.lastHumanMessage
-      ? `เพื่อนชื่อ "${input.lastHumanMessage.senderName}" เพิ่งพิมพ์ว่า: "${input.lastHumanMessage.text}" — ตอบโต้หรือเสนอโหวตเปิดห้อง/ปิดชั้น/ปิดแถวกลับ`
+      ? `เพื่อนชื่อ "${input.lastHumanMessage.senderName}" เพิ่งพิมพ์ว่า: "${input.lastHumanMessage.text}" — จงคิดวิเคราะห์เองและโต้ตอบกลับให้ตรงกับสถานการณ์และบุคลิก "${input.bot.archetype}" ของมึง!`
       : input.triggerReason === 'PRE_READY'
-        ? `มึงกำลังจะกดพร้อมโหวต ทิ้งท้ายเสนอว่าจะเปิดห้องไหน ปิดชั้นไหน หรือปิดแถวไหนสักประโยค`
-        : `เปิดบทสนทนาวิเคราะห์หรือเสนอโหวตเปิดห้อง/ปิดชั้น/ปิดแถวตามบทบาทของมึง`,
-    `ตอบกลับมาแค่ข้อความแชท 1-2 ประโยคสั้นๆ เท่านั้น:`,
+        ? `มึงกำลังจะกดพร้อมโหวต จงสรุปความเห็นหรือทิ้งท้ายตามบุคลิก "${input.bot.archetype}" ของมึง 1 ประโยค`
+        : `จงเปิดประเด็นวิเคราะห์/ซักถาม/ปั่นแชทอย่างอิสระจากข้อมูลตรงหน้าตามบุคลิก "${input.bot.archetype}" ของมึง`,
+    `ตอบกลับมาแค่ข้อความแชท 1-2 ประโยคสั้นๆ เท่านั้น (ห้ามซ้ำประโยคเดิมในแชท):`,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -484,10 +633,10 @@ export async function generateBotChat(
       false
     );
     const cleaned = sanitizeThaiColloquial(text);
-    if (!cleaned) return { text: buildFallbackChat(input), provider: 'fallback' };
+    if (!cleaned) return { text: buildEmergencyOfflineChat(input), provider: 'fallback' };
     return { text: cleaned, provider };
   } catch {
-    return { text: buildFallbackChat(input), provider: 'fallback' };
+    return { text: buildEmergencyOfflineChat(input), provider: 'fallback' };
   }
 }
 
@@ -571,6 +720,7 @@ export async function decideBotNightAction(params: {
   role: RoleId;
   myRoom: HotelRoomNumber;
   day: number;
+  totalFloors: number;
   unrevealedRooms: HotelRoomNumber[];
   players: FogBotContextPlayer[];
   evilPartnerIds: string[];
@@ -582,6 +732,7 @@ export async function decideBotNightAction(params: {
   privateClues: PrivateClueLog[];
 }): Promise<HotelRoomNumber | HotelFloorNumber | HotelColumnNumber | string | null> {
   const alivePlayers = params.players.filter((p) => p.alive);
+  const activeFloors = getFloorsForCount(params.totalFloors);
 
   const fallbackDecision = ():
     | HotelRoomNumber
@@ -590,7 +741,6 @@ export async function decideBotNightAction(params: {
     | string
     | null => {
     if (params.role === 'MURDERER') {
-      // Murderer has FULL freedom across all active rooms (may follow Accomplice ping or pick freely!)
       const pool = params.unrevealedRooms.filter((r) => r !== params.myRoom);
       if (
         params.secretPing?.room &&
@@ -615,16 +765,16 @@ export async function decideBotNightAction(params: {
     }
 
     if (params.role === 'HOUSEKEEPER' || params.role === 'WITNESS') {
-      const activeFloors = HOTEL_FLOORS.filter((f) =>
+      const floorsWithOpenRooms = activeFloors.filter((f) =>
         getRoomsOnFloor(f).some((r) => params.unrevealedRooms.includes(r))
       );
-      const pool = activeFloors.length > 0 ? activeFloors : [...HOTEL_FLOORS];
+      const pool = floorsWithOpenRooms.length > 0 ? floorsWithOpenRooms : activeFloors;
       return pool[Math.floor(Math.random() * pool.length)];
     }
 
     if (params.role === 'GLAZIER') {
       const activeCols = HOTEL_COLUMNS.filter((c) =>
-        getRoomsInColumn(c).some((r) => params.unrevealedRooms.includes(r))
+        getRoomsInColumn(c, params.totalFloors).some((r) => params.unrevealedRooms.includes(r))
       );
       const pool = activeCols.length > 0 ? activeCols : [...HOTEL_COLUMNS];
       return pool[Math.floor(Math.random() * pool.length)];
@@ -673,7 +823,7 @@ export async function decideBotNightAction(params: {
           ? `ผู้ช่วยส่งซิกแนะนำ: ชั้น ${params.secretPing.floor}`
           : 'ไม่มีซิก';
       prompt = `คุณคือฆาตกร (${params.bot.name}) คืนที่ ${params.day} ห้องของคุณคือ ${params.myRoom} (ห้ามจิ้มห้องตัวเอง!)
-คุณมีอิสระเลือกฆ่าได้ทุกห้องที่ยังเปิดอยู่ทั้ง 7 ชั้น: [${params.unrevealedRooms.filter((r) => r !== params.myRoom).join(', ')}]
+โรงแรมรอบนี้มี ${params.totalFloors} ชั้น คุณมีอิสระเลือกฆ่าได้ทุกห้องที่ยังเปิดอยู่: [${params.unrevealedRooms.filter((r) => r !== params.myRoom).join(', ')}]
 ${pingHint} (จะเชื่อหรือไม่เชื่อผู้ช่วยก็ได้)
 แชทลับผู้ช่วย: ${secretSnippet || '(ไม่มี)'}
 แชทล่าสุด: ${chatSnippet || '(ไม่มี)'}
@@ -688,20 +838,20 @@ ${pingHint} (จะเชื่อหรือไม่เชื่อผู้�
     } else if (params.role === 'HOUSEKEEPER') {
       prompt = `คุณคือแม่บ้าน (${params.bot.name}) คืนที่ ${params.day} เบาะแสเก่า: ${cluesText || 'ไม่มี'}
 แชทล่าสุด: ${chatSnippet || '(ไม่มี)'}
-เลือกตรวจสอบ 1 ชั้นแนวนอน (1 ถึง 7) เพื่อรู้จำนวนคนรอดในชั้นนั้น ตอบเป็น JSON เท่านั้น: {"floor": 4}`;
+เลือกตรวจสอบ 1 ชั้นแนวนอน (1 ถึง ${params.totalFloors}) เพื่อรู้จำนวนคนรอดในชั้นนั้น ตอบเป็น JSON เท่านั้น: {"floor": 2}`;
     } else if (params.role === 'WITNESS') {
       prompt = `คุณคือพยาน (${params.bot.name}) คืนที่ ${params.day} เบาะแสเก่า: ${cluesText || 'ไม่มี'}
 แชทล่าสุด: ${chatSnippet || '(ไม่มี)'}
-เลือกเฝ้าดู 1 ชั้น (1 ถึง 7) ที่คาดว่าฆาตกรจะมาฆ่าคนคืนนี้ ตอบเป็น JSON เท่านั้น: {"floor": 3}`;
+เลือกเฝ้าดู 1 ชั้น (1 ถึง ${params.totalFloors}) ที่คาดว่าฆาตกรจะมาฆ่าคนคืนนี้ ตอบเป็น JSON เท่านั้น: {"floor": 2}`;
     } else if (params.role === 'GLAZIER') {
       prompt = `คุณคือช่างเช็ดกระจก (${params.bot.name}) คืนที่ ${params.day} เบาะแสเก่า: ${cluesText || 'ไม่มี'}
-เลือกตรวจสอบ 1 แถวแนวตั้ง (1 = ห้องลงท้าย 01, 2 = ลงท้าย 02, 3 = ลงท้าย 03) เพื่อรู้จำนวนคนรอดทั้งแถว ตอบเป็น JSON เท่านั้น: {"column": 2}`;
+เลือกตรวจสอบ 1 แถวแนวตั้ง (1 = ห้องลงท้าย 01, 2 = ลงท้าย 02, 3 = ลงท้าย 03) ตลอด ${params.totalFloors} ชั้น เพื่อรู้จำนวนคนรอดทั้งแถว ตอบเป็น JSON เท่านั้น: {"column": 2}`;
     } else if (params.role === 'DETECTIVE' || params.role === 'ACCOMPLICE') {
       prompt = `คุณคือ ${ROLE_DEFINITIONS[params.role].nameTh} (${params.bot.name}) คืนที่ ${params.day}
 คนที่เคยตรวจแล้ว: [${params.alreadyCheckedIds.join(', ')}]
 ผู้รอดชีวิต (ห้ามเลือกตัวเอง id:${params.bot.id}):
 ${aliveSummary}
-เลือก id ของผู้เล่น 1 คนเพื่อตรวจว่าพักอยู่ชั้นไหน ตอบเป็น JSON เท่านั้น: {"targetId": "..."}`;
+เลือก id ของผู้เล่น 1 คนเพื่อตรวจว่าพักอยู่ชั้นไหน (1 ถึง ${params.totalFloors}) ตอบเป็น JSON เท่านั้น: {"targetId": "..."}`;
     }
 
     const { text } = await generateWithMultiProvider(
@@ -720,7 +870,7 @@ ${aliveSummary}
     }
     if (params.role === 'HOUSEKEEPER' || params.role === 'WITNESS') {
       const floorNum = Number(parsed.floor) as HotelFloorNumber;
-      return HOTEL_FLOORS.includes(floorNum) ? floorNum : fallbackDecision();
+      return activeFloors.includes(floorNum) ? floorNum : fallbackDecision();
     }
     if (params.role === 'GLAZIER') {
       const colNum = Number(parsed.column) as HotelColumnNumber;
@@ -872,32 +1022,36 @@ export async function decideBotDayVote(params: {
           ? `มึงอยู่ฝ่ายฆาตกร! ห้ามโหวตโดนห้อง/ชั้น/แถวของฆาตกรเด็ดขาด (ห้องห้ามโดน: ${params.murdererRoomIfEvil ?? params.myRoom}, ชั้นห้ามปิด: ${murdererFloor ?? myFloor}, แถวห้ามปิด: ${murdererCol ?? myColumn}) ให้เลือกโหวตปิดชั้นอื่น แถวอื่น หรือเปิดห้องคนดีแทน!`
           : `มึงอยู่ฝ่ายผู้บริสุทธิ์ (${roleDef.nameTh})! ห้องมึงอยู่ชั้น ${myFloor} แถว ${myColumn} (อย่าโหวตปิดชั้น/แถวตัวเอง!) หากเบาะแสชี้ชัดว่าชั้นไหนหรือแถวไหนน่าสงสัย/คนกระจุกตัว หรือเป็นวันท้ายๆ ให้โหวต "FLOOR" (ปิดตายทั้งชั้น) หรือ "COLUMN" (ปิดตายทั้งแถวแนวตั้ง) เพื่อกวาดล้างได้เลย หรือเลือก "ROOM" เพื่อเปิดรายห้อง`;
 
-    const canLockArea = params.day >= 2 && (safeFloors.length > 0 || safeCols.length > 0);
-    const prompt = canLockArea
-      ? `ชื่อมึง: ${params.bot.name} วันที่ ${params.day}/${params.maxDays}
+    const canFloorLock = params.day >= 2 && safeFloors.length > 0;
+    const canColLock = params.day >= 3 && safeCols.length > 0;
+
+    let optionsBlock = `- เปิด 1 ห้อง ("kind":"ROOM"): [${(safeRooms.length > 0 ? safeRooms : params.unrevealedRooms).join(', ')}]`;
+    if (canFloorLock) {
+      optionsBlock += `\n- ปิดตาย 1 ชั้นแนวนอน ("kind":"FLOOR"): [${safeFloors.join(', ')}]`;
+    }
+    if (canColLock) {
+      optionsBlock += `\n- ปิดตาย 1 แถวแนวตั้ง ("kind":"COLUMN"): [${safeCols.join(', ')}]`;
+    }
+
+    const dayRuleLine =
+      params.day <= 1
+        ? `วันที่ 1/${params.maxDays} (วันแรกโหวตได้เฉพาะ "เปิด 1 ห้อง" เท่านั้น! ปิดชั้นปลดวันที่ 2, ปิดแถวปลดวันที่ 3)`
+        : params.day === 2
+          ? `วันที่ 2/${params.maxDays} (ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน" — ปิดแถวแนวตั้งยังไม่ปลด ต้องรอวันที่ 3!)`
+          : `วันที่ ${params.day}/${params.maxDays} (ปลดล็อกครบทั้ง 3 แบบ: เปิด 1 ห้อง / ปิดตายทั้งชั้นแนวนอน / ปิดตายทั้งแถวแนวตั้ง!)`;
+
+    const prompt = `ชื่อมึง: ${params.bot.name} (${params.bot.archetype}) | นิสัย: ${params.bot.persona}
+${dayRuleLine}
 ${strategy}
 เบาะแสส่วนตัวของมึง: ${cluesText || 'ไม่มี'}
 ตัวเลือกที่โหวตได้ตอนนี้:
-- เปิด 1 ห้อง ("kind":"ROOM"): [${(safeRooms.length > 0 ? safeRooms : params.unrevealedRooms).join(', ')}]
-- ปิดตาย 1 ชั้นแนวนอน ("kind":"FLOOR"): [${safeFloors.join(', ')}]
-- ปิดตาย 1 แถวแนวตั้ง ("kind":"COLUMN"): [${safeCols.join(', ')}]
+${optionsBlock}
 
 แชทล่าสุด:
 ${chatSnippet || '(ไม่มี)'}
 
-เลือกโหวต 1 รูปแบบ (ROOM / FLOOR / COLUMN) และพิมพ์คอมเมนต์สั้นๆ สไตล์เพื่อนซี้กู-มึง (ห้ามพูดครับ/ค่ะ) ตอบเป็น JSON เท่านั้น:
-ตัวอย่าง: {"kind": "FLOOR", "target": 4, "comment": "ปิดตายชั้น 4 ไปเลย กวาดล้างให้จบๆ!"}
-หรือ {"kind": "COLUMN", "target": 2, "comment": "แถว 2 คนกระจุกเยอะ ปิดแถว 2 เลยพวกมึง!"}
-หรือ {"kind": "ROOM", "target": ${fallbackRoom}, "comment": "เปิดห้อง ${fallbackRoom} ดูเลยดีกว่า"}`
-      : `ชื่อมึง: ${params.bot.name} วันที่ 1/${params.maxDays} (วันแรกโหวตได้เฉพาะเปิด 1 ห้องเท่านั้น! ปิดชั้น/ปิดแถวจะเปิดวันที่ 2)
-${strategy}
-หมายเลขห้องที่โหวตเปิดได้ ("kind":"ROOM"): [${(safeRooms.length > 0 ? safeRooms : params.unrevealedRooms).join(', ')}]
-
-แชทล่าสุด:
-${chatSnippet || '(ไม่มี)'}
-
-เลือกโหวตเปิด 1 ห้อง และพิมพ์คอมเมนต์สั้นๆ สไตล์เพื่อนซี้กู-มึง (ห้ามพูดครับ/ค่ะ) ตอบเป็น JSON เท่านั้น:
-{"kind": "ROOM", "target": ${fallbackRoom}, "comment": "วันแรกเปิดห้อง ${fallbackRoom} ตัดช้อยส์ดูก่อนเลยพวกมึง"}`;
+เลือกโหวต 1 รูปแบบจากตัวเลือกที่ปลดล็อกแล้วข้างต้น และพิมพ์คอมเมนต์สั้นๆ ตามนิสัยของมึง (สไตล์เพื่อนซี้กู-มึง ห้ามพูดครับ/ค่ะ) ตอบเป็น JSON เท่านั้น:
+ตัวอย่าง: {"kind": "${canFloorLock ? 'FLOOR' : 'ROOM'}", "target": ${canFloorLock ? safeFloors[0] : fallbackRoom}, "comment": "..."}`;
 
     const { text } = await generateWithMultiProvider(
       params.bot.preferredProvider,
@@ -915,12 +1069,12 @@ ${chatSnippet || '(ไม่มี)'}
         ? sanitizeThaiColloquial(parsed.comment)
         : null;
 
-    if (kind === 'FLOOR') {
+    if (kind === 'FLOOR' && params.day >= 2) {
       const f = targetNum as HotelFloorNumber;
       if (safeFloors.includes(f)) {
         return { choice: { kind: 'FLOOR', floor: f }, comment };
       }
-    } else if (kind === 'COLUMN') {
+    } else if (kind === 'COLUMN' && params.day >= 3) {
       const c = targetNum as HotelColumnNumber;
       if (safeCols.includes(c)) {
         return { choice: { kind: 'COLUMN', column: c }, comment };

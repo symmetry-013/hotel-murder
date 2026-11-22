@@ -128,41 +128,56 @@ export function RoleCardContent({
         </div>
       )}
 
-      {/* Unified Private Clues & Secret Alerts Log */}
-      <div className="rounded-lg border border-[#32292E] bg-[#19141C] p-3.5 space-y-2.5">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-semibold text-[#E8C984]">
-            สมุดบันทึกเบาะแสลับส่วนตัว ({intel.clueLogs.length})
-          </p>
-          <span className="text-[11px] text-[#8D857E]">เห็นเฉพาะคุณคนเดียว</span>
-        </div>
+      {/* Unified Personal Investigation Log (My Investigation Log) */}
+      <InvestigationLogBox intel={intel} />
+    </div>
+  );
+}
 
-        {intel.clueLogs.length === 0 ? (
-          <p className="text-xs text-[#8D857E]">
-            ยังไม่มีเบาะแส — ใช้สกิลกลางคืนเพื่อเก็บข้อมูลชั้น แถวตั้ง หรือตำแหน่งแขก
-          </p>
-        ) : (
-          <ul className="space-y-2 max-h-56 overflow-y-auto pr-1">
-            {[...intel.clueLogs].reverse().map((log) => (
-              <li
-                key={log.id}
-                className={`rounded-md border px-3 py-2 text-xs leading-relaxed ${
-                  log.tone === 'DANGER'
-                    ? 'border-[#6B1F27] bg-[#261116] text-[#FECACA]'
-                    : log.tone === 'SAFE'
-                      ? 'border-[#255442] bg-[#11241D] text-[#A7F3D0]'
-                      : 'border-[#392F29] bg-[#201A16] text-[#E6DDD2]'
-                }`}
-              >
-                <p className="font-semibold mb-0.5">
-                  คืนที่ {log.night} · {log.title}
-                </p>
-                <p className="opacity-95">{log.detail}</p>
-              </li>
-            ))}
-          </ul>
-        )}
+export function InvestigationLogBox({
+  intel,
+  collapsible = false,
+}: {
+  intel: PrivatePlayerIntel;
+  collapsible?: boolean;
+}) {
+  const logs = intel.clueLogs;
+  return (
+    <div className="rounded-lg border border-[#3B3027] bg-[#19141C] p-3.5 space-y-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-[#E8C984]">
+          สมุดบันทึกเบาะแสส่วนตัว (My Investigation Log · {logs.length})
+        </p>
+        <span className="text-[11px] text-[#8D857E]">
+          {collapsible ? 'บันทึกผลสกิลทุกคืน · เห็นเฉพาะคุณ' : 'เห็นเฉพาะคุณคนเดียว'}
+        </span>
       </div>
+
+      {logs.length === 0 ? (
+        <p className="text-xs text-[#8D857E]">
+          ยังไม่มีบันทึก — ผลการใช้สกิลทุกคืน (เช่น ส่องชั้น, ตรวจแถว, เฝ้าชั้น, ล็อกห้อง) จะถูกเก็บไว้ที่นี่ไม่ให้ลืม
+        </p>
+      ) : (
+        <ul className="space-y-2 max-h-60 overflow-y-auto pr-1">
+          {[...logs].reverse().map((log) => (
+            <li
+              key={log.id}
+              className={`rounded-md border px-3 py-2 text-xs leading-relaxed ${
+                log.tone === 'DANGER'
+                  ? 'border-[#6B1F27] bg-[#261116] text-[#FECACA]'
+                  : log.tone === 'SAFE'
+                    ? 'border-[#255442] bg-[#11241D] text-[#A7F3D0]'
+                    : 'border-[#392F29] bg-[#201A16] text-[#E6DDD2]'
+              }`}
+            >
+              <p className="font-semibold mb-0.5 font-mono-tabular">
+                คืนที่ {log.night} · {log.title}
+              </p>
+              <p className="opacity-95">{log.detail}</p>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

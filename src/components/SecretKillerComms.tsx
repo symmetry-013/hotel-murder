@@ -5,11 +5,12 @@ import type {
   PrivatePlayerIntel,
   PublicPlayer,
 } from '../shared/gameTypes';
-import { HOTEL_FLOORS, ROLE_DEFINITIONS } from '../shared/gameTypes';
+import { getFloorsForCount, ROLE_DEFINITIONS } from '../shared/gameTypes';
 
 interface SecretKillerCommsProps {
   intel: PrivatePlayerIntel;
   myPlayerId: string;
+  totalFloors: number;
   alivePlayers: PublicPlayer[];
   pingModeActive: boolean;
   onTogglePingMode: () => void;
@@ -21,6 +22,7 @@ interface SecretKillerCommsProps {
 export function SecretKillerComms({
   intel,
   myPlayerId,
+  totalFloors,
   alivePlayers,
   pingModeActive,
   onTogglePingMode,
@@ -44,6 +46,7 @@ export function SecretKillerComms({
   const latestAccompliceClue = isAccomplice
     ? [...intel.clueLogs].reverse().find((c) => c.category === 'ACCOMPLICE') ?? null
     : null;
+  const activeFloorsAsc = [...getFloorsForCount(totalFloors)].reverse();
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -76,7 +79,8 @@ export function SecretKillerComms({
       {/* Murderer Complete Targeting Freedom Note */}
       {!isAccomplice && (
         <p className="text-xs text-[#F5C6CB] rounded-lg border border-[#4D1A22] bg-[#150A0E] px-3 py-2">
-          ฆาตกรมีอิสระเต็มที่ในการจิ้มฆ่า <strong className="text-[#FDE047]">ทุกห้องที่ยังไม่ปิดทั่วทั้ง 7 ชั้น</strong>{' '}
+          ฆาตกรมีอิสระเต็มที่ในการจิ้มฆ่า{' '}
+          <strong className="text-[#FDE047]">ทุกห้องที่ยังไม่ปิดทั่วทั้ง {totalFloors} ชั้น</strong>{' '}
           — จะฆ่าตามซิกของผู้ช่วย หรือเลือกฆ่าห้องอื่นเองก็ได้ตามใจชอบ
         </p>
       )}
@@ -106,7 +110,7 @@ export function SecretKillerComms({
         </div>
       )}
 
-      {/* Accomplice Signal / Ping Target Controls (Room + Floor + Player) */}
+      {/* Accomplice Signal / Ping Target Controls (Room + Dynamic Floors + Player) */}
       {isAccomplice && (
         <div className="rounded-lg border border-[#521A22] bg-[#140A0D] p-3 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -129,21 +133,21 @@ export function SecretKillerComms({
             </button>
           </div>
 
-          {/* Quick Floor Signal Buttons (1-7) */}
+          {/* Dynamic Quick Floor Signal Buttons (1..totalFloors) */}
           <div className="space-y-1">
             <span className="inline-flex items-center gap-1 text-[11px] text-[#C88D95]">
               <Layers className="h-3 w-3" />
-              <span>ส่งซิกชั้นที่สืบเจอให้ฆาตกร:</span>
+              <span>ส่งซิกชั้นที่สืบเจอให้ฆาตกร (ชั้น 1–{totalFloors}):</span>
             </span>
-            <div className="grid grid-cols-7 gap-1">
-              {[...HOTEL_FLOORS].reverse().map((floor) => {
+            <div className="flex flex-wrap gap-1.5">
+              {activeFloorsAsc.map((floor) => {
                 const active = ping?.kind === 'FLOOR' && ping.floor === floor;
                 return (
                   <button
                     key={floor}
                     type="button"
                     onClick={() => onPingFloor(floor)}
-                    className={`min-h-[36px] rounded-md border font-mono-tabular text-xs font-semibold transition-colors cursor-pointer ${
+                    className={`min-h-[36px] min-w-[54px] flex-1 rounded-md border font-mono-tabular text-xs font-semibold transition-colors cursor-pointer ${
                       active
                         ? 'border-[#FDE047] bg-[#4C141D] text-[#FDE047]'
                         : 'border-[#4D1E25] bg-[#221015] text-[#F5D0D5] hover:border-[#EF4444]'

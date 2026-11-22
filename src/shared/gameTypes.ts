@@ -50,8 +50,22 @@ export function getRoomsOnFloor(floor: HotelFloorNumber): HotelRoomNumber[] {
   return [floor * 100 + 1, floor * 100 + 2, floor * 100 + 3] as HotelRoomNumber[];
 }
 
-export function getRoomsInColumn(col: HotelColumnNumber): HotelRoomNumber[] {
-  return HOTEL_FLOORS.map((f) => (f * 100 + col) as HotelRoomNumber);
+export function getFloorCountForPlayerCount(totalPlayers: number): number {
+  return Math.max(4, Math.min(7, totalPlayers - 1));
+}
+
+export function getFloorsForCount(totalFloors: number): HotelFloorNumber[] {
+  const clamped = Math.max(4, Math.min(7, totalFloors));
+  return HOTEL_FLOORS.filter((f) => f <= clamped);
+}
+
+export function getRoomsForFloorCount(totalFloors: number): HotelRoomNumber[] {
+  const clamped = Math.max(4, Math.min(7, totalFloors));
+  return HOTEL_ROOMS.filter((r) => getFloorOfRoom(r) <= clamped);
+}
+
+export function getRoomsInColumn(col: HotelColumnNumber, totalFloors = 7): HotelRoomNumber[] {
+  return getFloorsForCount(totalFloors).map((f) => (f * 100 + col) as HotelRoomNumber);
 }
 
 export function getMaxDaysForPlayerCount(totalPlayers: number): number {
@@ -111,7 +125,7 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     faction: 'GOOD',
     shortAbilityTh: 'กลางคืนตรวจ 1 ชั้น (แนวนอน) เพื่อรู้ว่ามีคนรอดอยู่กี่คนในชั้นนั้น',
     detailTh:
-      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกตรวจสอบ 1 ชั้น (แนวนอน ชั้น 1–7) ระบบจะแจ้งผลลับเฉพาะคุณว่าในชั้นนั้นมีผู้เล่นที่ยังมีชีวิตเหลืออยู่กี่คน',
+      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกตรวจสอบ 1 ชั้นแนวนอน ระบบจะแจ้งผลลับเฉพาะคุณว่าในชั้นนั้นมีผู้เล่นที่ยังมีชีวิตเหลืออยู่กี่คน',
     hasNightAction: true,
     nightTargetType: 'FLOOR',
   },
@@ -122,7 +136,7 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     faction: 'GOOD',
     shortAbilityTh: 'กลางคืนตรวจ 1 แถว (แนวตั้ง 1-3) เพื่อรู้ว่ามีคนรอดอยู่กี่คนทั้งแถว',
     detailTh:
-      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกตรวจสอบ 1 แถวแนวตั้ง (แถว 1: x01, แถว 2: x02, แถว 3: x03) ระบบจะแจ้งผลลับว่าตลอดแนวตั้งตั้งแต่ชั้น 1–7 มีผู้เล่นรอดชีวิตอยู่กี่คน',
+      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกตรวจสอบ 1 แถวแนวตั้ง (แถว 1: x01, แถว 2: x02, แถว 3: x03) ระบบจะแจ้งผลลับว่าตลอดแนวตั้งทุกชั้นมีผู้เล่นรอดชีวิตอยู่กี่คน',
     hasNightAction: true,
     nightTargetType: 'COLUMN',
   },
@@ -131,9 +145,9 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     nameTh: 'นักสืบ',
     nameEn: 'Detective',
     faction: 'GOOD',
-    shortAbilityTh: 'กลางคืนตรวจชื่อผู้เล่น 1 คนเพื่อรู้ว่าพักอยู่ชั้นไหน',
+    shortAbilityTh: 'กลางคืนเลือกชื่อผู้เล่น 1 คน เพื่อสืบว่าพักอยู่ที่ชั้นไหน (ไม่รู้ฝ่าย/บทบาท)',
     detailTh:
-      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกตรวจสอบชื่อผู้เล่นที่ยังมีชีวิต 1 คน ระบบจะแจ้งผลลับเฉพาะคุณว่าผู้เล่นคนนั้นพักอยู่ที่ชั้นไหน (ชั้น 1–7)',
+      'ฝ่ายผู้บริสุทธิ์ — คุณไม่รู้ว่าใครเป็นฆาตกรหรืออยู่ฝ่ายไหน แต่ช่วงกลางคืนสามารถเลือกชื่อผู้เล่นที่ยังมีชีวิต 1 คน เพื่อสืบและรู้ได้ว่าผู้เล่นคนนั้นพักอยู่ที่ชั้นไหน',
     hasNightAction: true,
     nightTargetType: 'PLAYER',
   },
@@ -142,9 +156,9 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     nameTh: 'พยาน',
     nameEn: 'Witness',
     faction: 'GOOD',
-    shortAbilityTh: 'กลางคืนเฝ้าดู 1 ชั้น หากมีการฆ่าในชั้นนั้นจะรู้ว่าฆาตกรอยู่สูงกว่า/ต่ำกว่า/ชั้นเดียวกัน',
+    shortAbilityTh: 'กลางคืนเฝ้าดู 1 ชั้น หากมีคนถูกฆ่าชั้นนั้นจะรู้ว่าห้องฆาตกรอยู่ชั้นบน/ล่าง/ชั้นเดียวกัน',
     detailTh:
-      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกเฝ้าดู 1 ชั้น หากคืนนั้นฆาตกรลงมือฆ่าคนในชั้นเดียวกับที่คุณเฝ้าดู คุณจะได้เบาะแสลับว่าห้องของฆาตกรตัวจริงอยู่ "สูงกว่า", "ต่ำกว่า" หรือ "ชั้นเดียวกัน" (ถ้าเฝ้าผิดชั้นจะไม่ได้ข้อมูล)',
+      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกเฝ้าดู 1 ชั้น หากคืนนั้นฆาตกรลงมือฆ่าคนในชั้นเดียวกับที่คุณเฝ้า คุณจะได้เบาะแสลับว่าห้องพักของฆาตกรตัวจริงอยู่ "ชั้นบน (สูงกว่า)" หรือ "ชั้นล่าง (ต่ำกว่า)" หรือ "ชั้นเดียวกัน" (หากเฝ้าผิดชั้นหรือไม่มีคนตายจะไม่ได้เบาะแสใดๆ)',
     hasNightAction: true,
     nightTargetType: 'FLOOR',
   },
@@ -153,9 +167,9 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     nameTh: 'ฆาตกร',
     nameEn: 'Murderer',
     faction: 'EVIL',
-    shortAbilityTh: 'กลางคืนเลือกฆ่าได้อย่างอิสระทุกห้องทั้ง 7 ชั้น + เห็นตัวผู้ช่วยตั้งแต่เริ่มเกม',
+    shortAbilityTh: 'กลางคืนเลือกฆ่าได้อย่างอิสระทุกห้องทุกชั้น + เห็นตัวผู้ช่วยตั้งแต่เริ่มเกม',
     detailTh:
-      'ฝ่ายฆาตกร — เห็นชื่อและบทบาทของผู้ช่วยฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนคุณมีอิสระเต็มที่ในการเลือกสังหารห้องใดก็ได้ที่ยังไม่ถูกปิดทั่วทั้ง 7 ชั้น (จะเชื่อซิกของผู้ช่วยหรือเลือกเองก็ได้ตามใจชอบ!)',
+      'ฝ่ายฆาตกร — เห็นชื่อและบทบาทของผู้ช่วยฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนคุณมีอิสระเต็มที่ในการเลือกสังหารห้องใดก็ได้ที่ยังไม่ถูกปิดทั่วทั้งโรงแรม (จะเชื่อซิกของผู้ช่วยหรือเลือกเองก็ได้ตามใจชอบ!)',
     hasNightAction: true,
     nightTargetType: 'ROOM',
   },
@@ -166,7 +180,7 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     faction: 'EVIL',
     shortAbilityTh: 'เห็นตัวฆาตกรตั้งแต่เริ่มเกม + กลางคืนสืบชั้นเหยื่อทันทีแล้วส่งซิกให้ฆาตกร',
     detailTh:
-      'ฝ่ายฆาตกร — เห็นชื่อและบทบาทของฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนเลือกสืบชื่อผู้เล่น 1 คนเพื่อรู้ชั้นพักทันที แล้วใช้แชทลับใต้ดิน + ปุ่มส่งซิกชี้เป้าชั้น/ห้องบอกใบ้ให้ฆาตกร!',
+      'ฝ่ายฆาตกร — เห็นชื่อและบทบาทของฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนเลือกสืบชื่อผู้เล่น 1 คนเพื่อรู้ชั้นพักทันที พร้อมบันทึกในสมุดเบาะแส และใช้แชทลับใต้ดิน + ปุ่มส่งซิกชี้เป้าให้ฆาตกร!',
     hasNightAction: true,
     nightTargetType: 'PLAYER',
   },
@@ -211,12 +225,14 @@ export interface RevealedRoomInfo {
   kind: RevealedRoomKind;
   day: number;
   occupantName?: string;
+  /** NEVER populated during gameplay — revealed ONLY at GAME_OVER! */
   occupantRole?: RoleId;
 }
 
 /**
- * STRICT FOG OF WAR:
- * PublicPlayer NEVER exposes another living player's fixed room, floor, or secret role!
+ * STRICT FOG OF WAR & NO ROLE REVEAL ON DEATH:
+ * PublicPlayer NEVER exposes another living player's fixed room/floor,
+ * and NEVER exposes ANY player's role (alive or dead) until GAME_OVER!
  */
 export interface PublicPlayer {
   id: string;
@@ -231,8 +247,8 @@ export interface PublicPlayer {
   deathCause: DeathCause;
   deathDay: number | null;
   deathRoom: HotelRoomNumber | null;
-  revealedRole: RoleId | null;
-  finalRoom: HotelRoomNumber | null; // revealed ONLY at GAME_OVER
+  revealedRole: RoleId | null; // ONLY revealed at GAME_OVER!
+  finalRoom: HotelRoomNumber | null; // ONLY revealed at GAME_OVER!
   avatarColor: string;
 }
 
@@ -258,7 +274,14 @@ export interface SecretTargetPing {
 export interface PrivateClueLog {
   id: string;
   night: number;
-  category: 'HOUSEKEEPER' | 'GLAZIER' | 'DETECTIVE' | 'WITNESS' | 'ACCOMPLICE' | 'KEYMASTER';
+  category:
+    | 'HOUSEKEEPER'
+    | 'GLAZIER'
+    | 'DETECTIVE'
+    | 'WITNESS'
+    | 'ACCOMPLICE'
+    | 'KEYMASTER'
+    | 'MURDERER';
   title: string;
   detail: string;
   tone?: 'DANGER' | 'SAFE' | 'INFO';
@@ -273,6 +296,8 @@ export interface PrivatePlayerIntel {
   myColumn: HotelColumnNumber | null;
   evilPartners: Array<{ id: string; name: string; role: RoleId }>;
   nightActionSubmitted: boolean;
+  nightAcknowledged: boolean;
+  latestNightResult: PrivateClueLog | null;
   selectedNightTarget: number | string | null;
   lastKeymasterLockedRoom: HotelRoomNumber | null;
   myDayVote: DayVoteChoice | null;
@@ -298,7 +323,7 @@ export interface MorningReport {
   day: number;
   victimId: string | null;
   victimName: string | null;
-  victimRole: RoleId | null;
+  victimRole: RoleId | null; // ALWAYS null during gameplay (no role reveal on death!)
   crimeRoom: HotelRoomNumber | null;
   crimeFloor: HotelFloorNumber | null;
   lockSaved: boolean;
@@ -316,7 +341,6 @@ export interface VoteResolution {
   eliminatedPlayers: Array<{
     id: string;
     name: string;
-    role: RoleId;
     room: HotelRoomNumber;
   }>;
   wasEmpty: boolean;
@@ -335,12 +359,16 @@ export interface BotPostGameThought {
   provider?: 'groq' | 'gemini' | 'fallback';
 }
 
+export type NightStage = 'ACTION' | 'REVIEW';
+
 export interface RoomStatePayload {
   roomCode: string;
   phase: GamePhase;
+  nightStage: NightStage;
   day: number;
   maxDays: number;
   maxPlayers: number;
+  totalFloors: number;
   phaseEndsAt: number | null;
   revealedRooms: RevealedRoomInfo[];
   lockedFloors: HotelFloorNumber[];
@@ -359,6 +387,8 @@ export interface RoomStatePayload {
   votedCount: number;
   nightActionsSubmittedCount: number;
   nightActionsRequiredCount: number;
+  nightAckCount: number;
+  nightAckRequiredCount: number;
 }
 
 export type SceneAnimationType =

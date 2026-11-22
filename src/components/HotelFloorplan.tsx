@@ -22,17 +22,17 @@ import type {
 } from '../shared/gameTypes';
 import {
   formatDayVoteLabel,
+  getFloorsForCount,
   getRoomsInColumn,
   getRoomsOnFloor,
   HOTEL_COLUMNS,
-  HOTEL_FLOORS,
-  ROLE_DEFINITIONS,
   serializeDayVote,
 } from '../shared/gameTypes';
 
 interface HotelFloorplanProps {
   phase: GamePhase;
   day: number;
+  totalFloors: number;
   revealedRooms: RevealedRoomInfo[];
   lockedFloors: HotelFloorNumber[];
   lockedColumns: HotelColumnNumber[];
@@ -51,6 +51,7 @@ interface HotelFloorplanProps {
 export function HotelFloorplan({
   phase,
   day,
+  totalFloors,
   revealedRooms,
   lockedFloors,
   lockedColumns,
@@ -72,13 +73,16 @@ export function HotelFloorplan({
   const isVote = phase === 'VOTE';
   const nightSubmitted = Boolean(intel?.nightActionSubmitted);
 
+  const activeFloors = getFloorsForCount(totalFloors);
+  const totalRooms = activeFloors.length * 3;
+
   // Map revealed rooms by room number for O(1) lookup
   const revealedMap = new Map<number, RevealedRoomInfo>();
   for (const r of revealedRooms) {
     revealedMap.set(r.room, r);
   }
 
-  // Night role interaction flags (Murderer has 100% freedom across ALL active rooms on all 7 floors!)
+  // Night role interaction flags
   const canMurdererPickRoom = isNight && isAlive && myRole === 'MURDERER' && !nightSubmitted;
   const canKeymasterPickRoom = isNight && isAlive && myRole === 'KEYMASTER' && !nightSubmitted;
   const canHousekeeperPickFloor = isNight && isAlive && myRole === 'HOUSEKEEPER' && !nightSubmitted;
@@ -86,8 +90,13 @@ export function HotelFloorplan({
   const canGlazierPickColumn = isNight && isAlive && myRole === 'GLAZIER' && !nightSubmitted;
   const canAccomplicePing = isNight && isAlive && myRole === 'ACCOMPLICE' && accomplicePingMode;
 
+  // Progressive Voting Unlock:
+  // Day 1: ROOM only
+  // Day 2: ROOM + Horizontal FLOOR
+  // Day 3-4: ROOM + Horizontal FLOOR + Vertical COLUMN
   const canVote = isVote && isAlive;
-  const canAreaLockdownVote = canVote && day >= 2;
+  const canFloorLockdownVote = canVote && day >= 2;
+  const canColumnLockdownVote = canVote && day >= 3;
   const canClickRoom =
     canVote || canMurdererPickRoom || canKeymasterPickRoom || canAccomplicePing;
 
@@ -100,19 +109,21 @@ export function HotelFloorplan({
     if (!isAlive) return 'สถานะวิญญาณผู้ชม — ห้องที่ยังไม่เปิดถูกปิดบังเป็นความลับทั้งหมด';
     if (isVote) {
       if (myDayVote) {
-        return day >= 2
-          ? `คุณลงคะแนนแล้ว: ${formatDayVoteLabel(serializeDayVote(myDayVote))} — กดเปลี่ยนเป็นห้อง ชั้น หรือแถวอื่นได้ก่อนหมดเวลา`
-          : `คุณลงคะแนนแล้ว: ${formatDayVoteLabel(serializeDayVote(myDayVote))} — เปลี่ยนห้องได้ก่อนหมดเวลา (ปิดชั้น/ปิดแถวเริ่มใช้วันที่ 2)`;
+        return `คุณลงคะแนนแล้ว: ${formatDayVoteLabel(serializeDayVote(myDayVote))} — เปลี่ยนเป้าหมายได้ก่อนหมดเวลา`;
       }
-      return day >= 2
-        ? 'ช่วงโหวต 3 รูปแบบ! กดจิ้ม [รายห้อง] เพื่อเปิดดู, กด [ปิดชั้น X] ด้านซ้าย หรือกด [ปิดแถว Y] ด้านบน เพื่อปิดตายทั้งแนว!'
-        : 'โหวตวันที่ 1: กดจิ้มเลือก [1 ห้อง] ที่ยังไม่เปิด (???) — โหวตปิดชั้น/ปิดแถวจะปลดล็อกตั้งแต่วันที่ 2 หลังได้เบาะแสแม่บ้าน/ช่างเช็ดกระจก';
+      if (day >= 3) {
+        return 'วันที่ 3+ ปลดล็อกครบ 3 แบบ! เลือกจิ้ม [รายห้อง], กด [ปิดชั้น X] ด้านซ้าย หรือ [ปิดแถว Y] ด้านบน!';
+      }
+      if (day === 2) {
+        return 'วันที่ 2: โหวตได้ทั้ง [รายห้อง] และ [ปิดชั้น X] แนวนอน (ปิดแถวแนวตั้งปลดล็อกวันที่ 3)';
+      }
+      return 'วันที่ 1: โหวตได้เฉพาะ [รายห้อง (1 ห้อง)] เท่านั้น (ปิดชั้นปลดวันที่ 2 · ปิดแถวปลดวันที่ 3)';
     }
     if (canAccomplicePing) {
       return 'โหมดส่งซิกชี้เป้า: กดเลือกห้องที่ยังไม่เปิดบนแผนผังเพื่อส่งซิกให้ฆาตกร';
     }
     if (canMurdererPickRoom) {
-      return 'ฆาตกร: มีอิสระเลือกฆ่าได้ทุกห้องที่ยังไม่ปิดทั่วทั้ง 7 ชั้น (ห้ามเลือกห้องตัวเอง)';
+      return `ฆาตกร: มีอิสระเลือกฆ่าได้ทุกห้องที่ยังไม่ปิดทั่วทั้ง ${activeFloors.length} ชั้น (ห้ามเลือกห้องตัวเอง)`;
     }
     if (canKeymasterPickRoom) {
       return lastLockedRoom
@@ -120,16 +131,16 @@ export function HotelFloorplan({
         : 'ช่างกุญแจ: กดเลือก 1 ห้องที่ยังไม่เปิดเพื่อล็อกป้องกันการฆ่าคืนนี้';
     }
     if (canHousekeeperPickFloor) {
-      return 'แม่บ้าน: กดปุ่ม "ตรวจชั้น" ทางซ้ายของชั้น 1–7 เพื่อนับจำนวนคนรอดชีวิตในชั้นนั้น';
+      return `แม่บ้าน: กดปุ่ม "ตรวจชั้น" ทางซ้ายของชั้น 1–${activeFloors.length} เพื่อนับจำนวนคนรอดชีวิตในชั้นนั้น`;
     }
     if (canWitnessPickFloor) {
-      return 'พยาน: กดปุ่ม "เฝ้าชั้น" ทางซ้ายของชั้น 1–7 หากมีการฆ่าชั้นนั้นจะได้เบาะแสตำแหน่งฆาตกร';
+      return `พยาน: กดปุ่ม "เฝ้าชั้น" ทางซ้ายของชั้น 1–${activeFloors.length} หากมีการฆ่าชั้นนั้นจะได้เบาะแสตำแหน่งฆาตกร`;
     }
     if (canGlazierPickColumn) {
       return 'ช่างเช็ดกระจก: กดปุ่ม "ตรวจแถว" ด้านบนแถว 1, 2 หรือ 3 เพื่อนับคนรอดชีวิตทั้งแถวแนวตั้ง';
     }
     if (isNight && nightSubmitted) {
-      return 'ส่งคำสั่งกลางคืนแล้ว — กำลังรอผู้เล่นบทบาทอื่นหรือครบเวลา...';
+      return 'ส่งคำสั่งกลางคืนแล้ว — อ่านผลสกิลในแผงด้านบนแล้วกดปุ่ม "รับทราบข้อมูล (Acknowledge)"';
     }
     if (isNight && (myRole === 'DETECTIVE' || myRole === 'ACCOMPLICE')) {
       return 'เลือกชื่อผู้เล่นที่ยังมีชีวิตในแผงปฏิบัติการกลางคืนเพื่อสืบชั้นพัก';
@@ -142,14 +153,14 @@ export function HotelFloorplan({
 
   return (
     <section
-      aria-label="แผนผังโรงแรม 7 ชั้น 3 แถวตั้ง"
+      aria-label={`แผนผังโรงแรม ${activeFloors.length} ชั้น 3 แถวตั้ง`}
       className="rounded-xl border border-[#2F262C] bg-[#141116]/95 p-3.5 sm:p-5 space-y-3"
     >
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#251F24] pb-3">
         <div>
           <h2 className="font-display text-base sm:text-lg font-semibold text-[#F5EFE6]">
-            แผนผังโรงแรม 7 ชั้น · 3 แถวตั้ง (21 ห้อง)
+            แผนผังโรงแรม {activeFloors.length} ชั้น · 3 แถวตั้ง ({totalRooms} ห้อง)
           </h2>
           <p className="text-xs text-[#CFC8BF] mt-0.5">{actionGuide}</p>
         </div>
@@ -161,21 +172,32 @@ export function HotelFloorplan({
           </span>
           <span className="inline-flex items-center gap-1 text-[#9D948A]">
             <EyeOff className="h-3 w-3" />
-            <span>เปิด/ปิดแล้ว {revealedRooms.length}/21</span>
+            <span>
+              เปิด/ปิดแล้ว {revealedRooms.length}/{totalRooms}
+            </span>
           </span>
         </div>
       </div>
 
-      {/* 3 Vertical Column Headers (Interactive for Day 2+ VOTE Column Lockdown & NIGHT Glazier) */}
-      <div className="grid grid-cols-[70px_1fr] sm:grid-cols-[106px_1fr] gap-2 sm:gap-2.5 items-center">
-        <div className="text-[10px] sm:text-[11px] font-mono-tabular text-[#7D746D] text-center">
-          {canAreaLockdownVote ? 'โหวตปิดชั้น / แถว' : 'ชั้น / แถวตั้ง'}
+      {/* 3 Vertical Column Headers (Interactive for Day 3+ VOTE Column Lockdown & NIGHT Glazier) */}
+      <div className="grid grid-cols-[78px_1fr] sm:grid-cols-[118px_1fr] gap-2 sm:gap-2.5 items-center">
+        <div className="text-[10px] sm:text-[11px] font-mono-tabular text-[#7D746D] text-center leading-tight">
+          {canVote
+            ? day >= 3
+              ? 'ปิดชั้น / แถว'
+              : day === 2
+                ? 'ปิดชั้น (วัน 2)'
+                : 'โหวตรายห้อง'
+            : 'ชั้น / แถวตั้ง'}
         </div>
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5">
           {HOTEL_COLUMNS.map((col) => {
             const isLockedCol = lockedColumns.includes(col);
-            const hasUnrevealedInCol = getRoomsInColumn(col).some((r) => !revealedMap.has(r));
-            const isVotedThisCol = isVote && myDayVote?.kind === 'COLUMN' && myDayVote.column === col;
+            const hasUnrevealedInCol = getRoomsInColumn(col, totalFloors).some(
+              (r) => !revealedMap.has(r)
+            );
+            const isVotedThisCol =
+              isVote && myDayVote?.kind === 'COLUMN' && myDayVote.column === col;
             const isPickedGlazierCol =
               isNight && myRole === 'GLAZIER' && intel?.selectedNightTarget === col;
 
@@ -201,8 +223,23 @@ export function HotelFloorplan({
               );
             }
 
-            // VOTE (Day 2+): Vertical Column Lockdown button!
-            if (canAreaLockdownVote) {
+            // VOTE: Day 3+ Vertical Column Lockdown (active) vs Day 1-2 (visibly locked)
+            if (canVote) {
+              if (!canColumnLockdownVote) {
+                return (
+                  <button
+                    key={col}
+                    type="button"
+                    disabled
+                    title="โหวตปิดตายแถวแนวตั้งจะปลดล็อกในวันที่ 3"
+                    className="min-h-[42px] flex items-center justify-center gap-1 rounded-lg border border-dashed border-[#342B30] bg-[#110E13] px-1.5 text-[10px] sm:text-[11px] font-mono-tabular text-[#7A716A] cursor-not-allowed"
+                  >
+                    <Lock className="h-3 w-3 shrink-0 opacity-70" />
+                    <span className="truncate">แถว {col} (ปลดวัน 3)</span>
+                  </button>
+                );
+              }
+
               const disabledCol = isLockedCol || !hasUnrevealedInCol;
               return (
                 <button
@@ -250,9 +287,9 @@ export function HotelFloorplan({
         </div>
       </div>
 
-      {/* 7-Floor Matrix */}
+      {/* Dynamic Floor Matrix (totalPlayers - 1 floors) */}
       <div className="space-y-1.5 sm:space-y-2">
-        {HOTEL_FLOORS.map((floor) => {
+        {activeFloors.map((floor) => {
           const rooms = getRoomsOnFloor(floor);
           const isLockedFloor = lockedFloors.includes(floor);
           const hasUnrevealedOnFloor = rooms.some((r) => !revealedMap.has(r));
@@ -267,11 +304,11 @@ export function HotelFloorplan({
           return (
             <div
               key={floor}
-              className={`grid grid-cols-[70px_1fr] sm:grid-cols-[106px_1fr] gap-2 sm:gap-2.5 items-stretch rounded-lg transition-colors ${
+              className={`grid grid-cols-[78px_1fr] sm:grid-cols-[118px_1fr] gap-2 sm:gap-2.5 items-stretch rounded-lg transition-colors ${
                 isFloorPinged ? 'ring-1 ring-[#FDE047]/70 bg-[#2C1116]/40 p-0.5 -m-0.5' : ''
               }`}
             >
-              {/* Left Floor Column: Vote Floor Lockdown / Night Housekeeper & Witness / Static Label */}
+              {/* Left Floor Column: Night Housekeeper/Witness | Day 2+ Floor Lockdown | Day 1 Locked | Static */}
               <div className="flex flex-col justify-center">
                 {canHousekeeperPickFloor || canWitnessPickFloor || isPickedNightFloor ? (
                   <button
@@ -297,7 +334,22 @@ export function HotelFloorplan({
                           : `ตรวจชั้น ${floor}`}
                     </span>
                   </button>
-                ) : canAreaLockdownVote ? (
+                ) : canVote && !canFloorLockdownVote ? (
+                  <button
+                    type="button"
+                    disabled
+                    title="โหวตปิดตายทั้งชั้นแนวนอนจะปลดล็อกในวันที่ 2"
+                    className="min-h-[58px] flex flex-col items-center justify-center gap-0.5 rounded-lg border border-dashed border-[#342B30] bg-[#110E13] px-1 text-center text-[#7A716A] cursor-not-allowed"
+                  >
+                    <span className="font-mono-tabular text-xs font-semibold text-[#9D948A]">
+                      ชั้น {floor}
+                    </span>
+                    <span className="inline-flex items-center gap-0.5 text-[10px]">
+                      <Lock className="h-2.5 w-2.5 shrink-0" />
+                      <span>ปลดวัน 2</span>
+                    </span>
+                  </button>
+                ) : canFloorLockdownVote ? (
                   <button
                     type="button"
                     disabled={isLockedFloor || !hasUnrevealedOnFloor}
@@ -516,17 +568,14 @@ export function HotelFloorplan({
                           )}
                       </div>
 
-                      {/* Bottom row: Strict Fog of War or Revealed/Locked Detail */}
+                      {/* Bottom row: Strict Fog of War & NO ROLE REVEAL ON DEATH */}
                       <div className="truncate text-[10px] sm:text-[11px] leading-tight">
                         {revealed ? (
                           revealed.kind === 'LOCKED_EMPTY' ? (
                             <span className="font-semibold text-[#C99A9F]">ปิดตาย (ว่าง)</span>
                           ) : revealed.kind === 'LOCKED_PLAYER' ? (
                             <span className="font-semibold text-[#FECACA]">
-                              ปิดตาย · {revealed.occupantName}
-                              {revealed.occupantRole
-                                ? ` (${ROLE_DEFINITIONS[revealed.occupantRole].nameTh})`
-                                : ''}
+                              ปิดตาย · {revealed.occupantName ?? 'ผู้ตาย'} (DEAD)
                             </span>
                           ) : revealed.kind === 'INITIAL_CRIME' ? (
                             <span className="font-semibold text-[#FCA5A5]">ศพตั้งต้น (ว่าง)</span>
@@ -534,10 +583,7 @@ export function HotelFloorplan({
                             <span>ห้องว่าง (เปิดแล้ว)</span>
                           ) : (
                             <span className="font-semibold text-[#FECACA]">
-                              {revealed.occupantName ?? 'ผู้ตาย'}
-                              {revealed.occupantRole
-                                ? ` · ${ROLE_DEFINITIONS[revealed.occupantRole].nameTh}`
-                                : ''}
+                              {revealed.occupantName ?? 'ผู้ตาย'} · DEAD
                             </span>
                           )
                         ) : isRepeatLockBanned ? (
@@ -579,7 +625,7 @@ export function HotelFloorplan({
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm border border-[#991B1B] bg-[#2D1016]" />
-          <span>ปิดตาย (LOCKED) / พบผู้ตาย</span>
+          <span>เสียชีวิต (DEAD) / ปิดตาย (ไม่เปิดบทบาท)</span>
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm border border-[#2B252A] bg-[#110E13]" />
