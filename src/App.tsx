@@ -89,6 +89,11 @@ export default function App() {
   const [sceneQueue, setSceneQueue] = useState<SceneAnimationPayload[]>([]);
 
   const [chatInput, setChatInput] = useState('');
+  const [typingIndicator, setTypingIndicator] = useState<{
+    botId: string;
+    botName: string;
+    text: string;
+  } | null>(null);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [accomplicePingMode, setAccomplicePingMode] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -133,6 +138,13 @@ export default function App() {
         setUnreadChatCount((n) => Math.min(99, n + 1));
       }
     });
+
+    socket.on(
+      'chat:typing',
+      (payload: { botId: string; botName: string; text: string } | null) => {
+        setTypingIndicator(payload);
+      }
+    );
 
     socket.on('secretChat:message', (smsg: SecretChatMessage) => {
       setIntel((prev) => {
@@ -188,9 +200,11 @@ export default function App() {
 
     if (phase === 'SETUP') {
       setRoleModalOpen(true);
+      setTypingIndicator(null);
       soundEngine.playReadyChime();
     } else if (phase === 'DAY') {
       setAccomplicePingMode(false);
+      setTypingIndicator(null);
       if (previous === 'SETUP') {
         setRoleModalOpen(false);
       } else if (previous === 'NIGHT') {
@@ -293,6 +307,7 @@ export default function App() {
     setMyPlayerId(null);
     setInviteRoomCode(null);
     setSceneQueue([]);
+    setTypingIndicator(null);
     window.history.replaceState({}, '', window.location.pathname);
   };
 
@@ -1162,6 +1177,17 @@ export default function App() {
             })}
             <div ref={chatEndRef} />
           </div>
+
+          {typingIndicator && (isDay || isVote) && (
+            <div className="flex items-center gap-2 border-t border-[#221C21] bg-[#130F15] px-4 py-1.5 text-xs text-[#C8A25A] shrink-0">
+              <span className="inline-flex gap-1" aria-hidden="true">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#C8A25A] animate-bounce [animation-delay:-0.25s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-[#C8A25A] animate-bounce [animation-delay:-0.12s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-[#C8A25A] animate-bounce" />
+              </span>
+              <span className="truncate font-medium">{typingIndicator.text}</span>
+            </div>
+          )}
 
           <form
             onSubmit={handleSendChat}

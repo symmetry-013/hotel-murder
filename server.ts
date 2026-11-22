@@ -46,7 +46,6 @@ import {
 import type {
   BotProfile,
   FogBotContextPlayer,
-  MultiBotParticipant,
   PastVoteRecord,
 } from './server/aiProvider.ts';
 import {
@@ -56,7 +55,6 @@ import {
   generateAccompliceSecretPing,
   generateBotChat,
   generateBotSecretReply,
-  generateMultiBotExchange,
   generatePostGameThoughts,
 } from './server/aiProvider.ts';
 
@@ -158,6 +156,14 @@ interface GameRoom {
   lastChatAt: number;
   botChatterCountThisPhase: number;
   conversationGenerationId: number;
+  botChatRunning: boolean;
+  botChatQueue: Array<{
+    botId: string;
+    triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'PRE_READY' | 'BOT_BANTER';
+    lastHumanMessage?: { senderName: string; text: string };
+  }>;
+  botVoteRunning: boolean;
+  usedBankLines: Set<string>;
   createdAt: number;
 }
 
@@ -297,17 +303,12 @@ function getEvilPartnersForBot(
     }));
 }
 
-function buildMultiBotParticipant(room: GameRoom, bot: ServerPlayer): MultiBotParticipant | null {
-  if (!bot.alive || !bot.botProfile || !bot.role || !bot.room) return null;
-  return {
-    bot: bot.botProfile,
-    role: bot.role,
-    myRoom: bot.room,
-    myFloor: getFloorOfRoom(bot.room),
-    myColumn: getColumnOfRoom(bot.room),
-    evilPartners: getEvilPartnersForBot(room, bot),
-    privateClues: bot.clueLogs,
-  };
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomBotDelayMs(): number {
+  return 4000 + Math.floor(Math.random() * 1001); // 4,000 – 5,000 ms
 }
 
 /**
@@ -583,6 +584,8 @@ async function startServer() {
     winnerPlayerName: string | null = null
   ): void {
     clearRoomTimers(room);
+    resetBotChatQueue(room);
+    room.botVoteRunning = false;
     room.phase = 'GAME_OVER';
     room.phaseEndsAt = null;
     room.winner = winner;
@@ -645,127 +648,122 @@ async function startServer() {
     });
   }
 
-  async function triggerSingleBotChat(
+  function resetBotChatQueue(room: GameRoom): void {
+    room.conversationGenerationId += 1;
+    room.botChatQueue = [];
+    room.botChatRunning = false;
+    io.to(room.roomCode).emit('chat:typing', null);
+  }
+
+  /**
+   * SEQUENTIAL BOT CHAT LOOP (100% Rate-Limit Safe):
+   * - Never fires concurrent LLM API calls!
+   * - Emits "[ชื่อบอท] กำลังพิมพ์..." before each bot speaks
+   * - Waits for current bot to finish + emits chat message
+   * - Waits random 4,000–5,000 ms (4–5s) before processing the next bot in the queue
+   */
+  async function runBotChatLoop(
     room: GameRoom,
-    bot: ServerPlayer,
+    botsToSpeak: ServerPlayer[],
     triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'PRE_READY' | 'BOT_BANTER',
     lastHumanMessage?: { senderName: string; text: string }
   ): Promise<void> {
     if (!rooms.has(room.roomCode)) return;
-    if (!bot.alive || !bot.botProfile || !bot.role || !bot.room) return;
     if (room.phase !== 'DAY' && room.phase !== 'VOTE') return;
 
-    const result = await generateBotChat({
-      bot: bot.botProfile,
-      role: bot.role,
-      myRoom: bot.room,
-      myFloor: getFloorOfRoom(bot.room),
-      myColumn: getColumnOfRoom(bot.room),
-      totalFloors: room.totalFloors,
-      phase: room.phase,
-      day: room.day,
-      maxDays: room.maxDays,
-      revealedRooms: Array.from(room.revealedRooms.values()).map((r) => ({
-        room: r.room,
-        kind: r.kind,
-        day: r.day,
-        occupantName: r.occupantName,
-      })),
-      lockedFloors: Array.from(room.lockedFloors),
-      lockedColumns: Array.from(room.lockedColumns),
-      players: toFogBotContextPlayers(room),
-      pastVoteRecords: room.pastVoteRecords,
-      recentChat: room.chat.slice(-15),
-      morningHeadline: room.morningReport?.headline ?? null,
-      evilPartners: getEvilPartnersForBot(room, bot),
-      privateClues: bot.clueLogs,
-      triggerReason,
-      lastHumanMessage,
-    });
+    // Enqueue requested bots into the single per-room sequential queue
+    for (const bot of botsToSpeak) {
+      if (!bot.alive || !bot.isBot) continue;
+      if (room.botChatQueue.length >= 6) break;
+      room.botChatQueue.push({
+        botId: bot.id,
+        triggerReason,
+        lastHumanMessage,
+      });
+    }
 
-    if (!result) return;
-    if (!rooms.has(room.roomCode)) return;
-    if (!bot.alive || (room.phase !== 'DAY' && room.phase !== 'VOTE')) return;
+    // If the sequential loop is already running for this room, let it drain the new queue items one-by-one!
+    if (room.botChatRunning) return;
+    room.botChatRunning = true;
 
-    pushChat(room, {
-      senderId: bot.id,
-      senderName: bot.name,
-      isSystem: false,
-      isBot: true,
-      text: result.text,
-      kind: 'CHAT',
-    });
-  }
-
-  /**
-   * Structured Multi-Bot Exchange: generates 2-3 cohesive, context-aware replies in ONE LLM call
-   * so bots react to the human player AND bounce off each other naturally with staggered typing delays.
-   */
-  async function triggerMultiBotExchange(
-    room: GameRoom,
-    selectedBots: ServerPlayer[],
-    triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'BOT_BANTER',
-    lastHumanMessage?: { senderName: string; text: string }
-  ): Promise<void> {
-    if (!rooms.has(room.roomCode)) return;
-    if (room.phase !== 'DAY' && room.phase !== 'VOTE') return;
-
-    const participants = selectedBots
-      .map((b) => buildMultiBotParticipant(room, b))
-      .filter((p): p is MultiBotParticipant => p !== null);
-
-    if (participants.length === 0) return;
-
-    const expectedGen = room.conversationGenerationId;
+    const loopGen = room.conversationGenerationId;
     const expectedPhase = room.phase;
 
-    const messages = await generateMultiBotExchange({
-      speakers: participants,
-      totalFloors: room.totalFloors,
-      phase: room.phase,
-      day: room.day,
-      maxDays: room.maxDays,
-      revealedRooms: Array.from(room.revealedRooms.values()).map((r) => ({
-        room: r.room,
-        kind: r.kind,
-        day: r.day,
-        occupantName: r.occupantName,
-      })),
-      lockedFloors: Array.from(room.lockedFloors),
-      lockedColumns: Array.from(room.lockedColumns),
-      players: toFogBotContextPlayers(room),
-      pastVoteRecords: room.pastVoteRecords,
-      recentChat: room.chat.slice(-15),
-      morningHeadline: room.morningReport?.headline ?? null,
-      triggerReason,
-      lastHumanMessage,
-    });
+    try {
+      while (room.botChatQueue.length > 0) {
+        if (!rooms.has(room.roomCode)) break;
+        if (room.phase !== expectedPhase || room.conversationGenerationId !== loopGen) break;
 
-    if (!rooms.has(room.roomCode) || room.phase !== expectedPhase) return;
-    if (messages.length === 0) return;
+        const job = room.botChatQueue.shift()!;
+        const bot = room.players.get(job.botId);
+        if (!bot || !bot.alive || !bot.botProfile || !bot.role || !bot.room) continue;
 
-    messages.forEach((turn, idx) => {
-      const delay = idx === 0 ? 450 : idx * 2400 + Math.floor(Math.random() * 900);
-      scheduleRoomTimer(
-        room,
-        () => {
-          if (!rooms.has(room.roomCode) || room.phase !== expectedPhase) return;
-          // If a human sent a fresh message mid-sequence, drop stale trailing bot turns
-          if (idx > 0 && room.conversationGenerationId !== expectedGen) return;
-          const speaker = room.players.get(turn.botId);
-          if (!speaker || !speaker.alive) return;
-          pushChat(room, {
-            senderId: speaker.id,
-            senderName: speaker.name,
-            isSystem: false,
-            isBot: true,
-            text: turn.text,
-            kind: 'CHAT',
-          });
-        },
-        delay
-      );
-    });
+        // 1. Emit real-time Typing Indicator BEFORE calling LLM
+        io.to(room.roomCode).emit('chat:typing', {
+          botId: bot.id,
+          botName: bot.name,
+          text: `${bot.name} กำลังพิมพ์...`,
+        });
+
+        // Natural brief typing beat on Day 1 (0-token bank) so the typing indicator is visibly felt
+        if (room.day <= 1) {
+          await delayMs(1100 + Math.floor(Math.random() * 500));
+        }
+
+        const result = await generateBotChat({
+          bot: bot.botProfile,
+          role: bot.role,
+          myRoom: bot.room,
+          myFloor: getFloorOfRoom(bot.room),
+          myColumn: getColumnOfRoom(bot.room),
+          totalFloors: room.totalFloors,
+          phase: room.phase,
+          day: room.day,
+          maxDays: room.maxDays,
+          revealedRooms: Array.from(room.revealedRooms.values()).map((r) => ({
+            room: r.room,
+            kind: r.kind,
+            day: r.day,
+            occupantName: r.occupantName,
+          })),
+          lockedFloors: Array.from(room.lockedFloors),
+          lockedColumns: Array.from(room.lockedColumns),
+          players: toFogBotContextPlayers(room),
+          pastVoteRecords: room.pastVoteRecords,
+          recentChat: room.chat.slice(-10),
+          morningHeadline: room.morningReport?.headline ?? null,
+          evilPartners: getEvilPartnersForBot(room, bot),
+          privateClues: bot.clueLogs,
+          triggerReason: job.triggerReason,
+          lastHumanMessage: job.lastHumanMessage,
+          usedBankLines: room.usedBankLines,
+        });
+
+        // Clear typing indicator immediately when bot finishes
+        io.to(room.roomCode).emit('chat:typing', null);
+
+        if (!rooms.has(room.roomCode)) break;
+        if (room.phase !== expectedPhase || room.conversationGenerationId !== loopGen) break;
+        if (!bot.alive) continue;
+
+        pushChat(room, {
+          senderId: bot.id,
+          senderName: bot.name,
+          isSystem: false,
+          isBot: true,
+          text: result.text,
+          kind: 'CHAT',
+        });
+
+        // 2. Sequential 4,000–5,000 ms cooldown before the next bot starts typing/calling API!
+        if (room.botChatQueue.length > 0) {
+          await delayMs(randomBotDelayMs());
+        }
+      }
+    } finally {
+      room.botChatRunning = false;
+      io.to(room.roomCode).emit('chat:typing', null);
+    }
   }
 
   function checkAllReadyToVote(room: GameRoom): void {
@@ -803,12 +801,12 @@ async function startServer() {
    */
   function startDayPhase(room: GameRoom): void {
     clearRoomTimers(room);
+    resetBotChatQueue(room);
     room.phase = 'DAY';
     room.phaseEndsAt = null;
     room.voteResolution = null;
     room.secretPing = null;
     room.botChatterCountThisPhase = 0;
-    room.conversationGenerationId += 1;
 
     for (const p of room.players.values()) {
       p.readyToVote = false;
@@ -844,57 +842,32 @@ async function startServer() {
 
     const aliveBots = shuffle(getAlivePlayers(room).filter((p) => p.isBot));
 
-    // Prioritize bots who received fresh clues last night to lead the opening multi-bot debate!
+    // Randomly pick 3–5 living bots per Day/Morning round (capped at <= 12 req/min with 4-5s spacing!)
+    const targetSpeakerCount = Math.min(aliveBots.length, 3 + Math.floor(Math.random() * 3));
     const botsWithFreshClues = aliveBots.filter((b) =>
       b.clueLogs.some((c) => c.night === room.day - 1)
     );
     const otherBots = aliveBots.filter((b) => !botsWithFreshClues.includes(b));
-    const orderedOpeners = [...botsWithFreshClues, ...otherBots].slice(
-      0,
-      Math.min(3, aliveBots.length)
-    );
+    const selectedSpeakers = [...botsWithFreshClues, ...otherBots].slice(0, targetSpeakerCount);
 
-    // Initial wave: cohesive 3-bot multi-turn conversation bouncing off each other
-    if (orderedOpeners.length > 0) {
+    if (selectedSpeakers.length > 0) {
       scheduleRoomTimer(
         room,
         () => {
           if (room.phase !== 'DAY') return;
-          void triggerMultiBotExchange(room, orderedOpeners, 'PHASE_START');
+          void runBotChatLoop(room, selectedSpeakers, 'PHASE_START');
         },
-        1300
+        1400
       );
     }
 
-    // Autonomous mid-day bot-to-bot banter if discussion hasn't jumped straight into voting
-    if (aliveBots.length >= 2) {
-      scheduleRoomTimer(
-        room,
-        () => {
-          if (room.phase !== 'DAY') return;
-          if (room.botChatterCountThisPhase >= 12) return;
-          // Only trigger banter if no human spoke in the last 5 seconds
-          if (Date.now() - room.lastHumanReplyAt < 5000) return;
-          const banterPair = shuffle(getAlivePlayers(room).filter((p) => p.isBot)).slice(0, 2);
-          if (banterPair.length > 0) {
-            room.botChatterCountThisPhase += banterPair.length;
-            void triggerMultiBotExchange(room, banterPair, 'BOT_BANTER');
-          }
-        },
-        11500
-      );
-    }
-
-    // Staggered bot Ready checks (15–28s) preserving 100% mutual Ready system
+    // Staggered bot Ready checks (18–32s) preserving 100% mutual Ready system
     aliveBots.forEach((bot, idx) => {
-      const readyDelay = 15500 + idx * 2100 + Math.floor(Math.random() * 2000);
+      const readyDelay = 18000 + idx * 2400 + Math.floor(Math.random() * 2000);
       scheduleRoomTimer(
         room,
         () => {
           if (room.phase !== 'DAY' || !bot.alive || bot.readyToVote) return;
-          if (idx === aliveBots.length - 1) {
-            void triggerSingleBotChat(room, bot, 'PRE_READY');
-          }
           bot.readyToVote = true;
           broadcastRoomState(room);
           checkAllReadyToVote(room);
@@ -905,6 +878,28 @@ async function startServer() {
   }
 
   /**
+   * SEQUENTIAL BOT VOTE LOOP: ensures Day Votes never blast parallel LLM requests either.
+   */
+  async function runSequentialBotVotes(room: GameRoom, fastMode = false): Promise<void> {
+    if (room.botVoteRunning || room.phase !== 'VOTE') return;
+    room.botVoteRunning = true;
+    try {
+      const bots = shuffle(getAlivePlayers(room).filter((p) => p.isBot && p.dayVote === null));
+      for (let i = 0; i < bots.length; i++) {
+        if (!rooms.has(room.roomCode) || room.phase !== 'VOTE') break;
+        const bot = bots[i];
+        if (!bot.alive || bot.dayVote !== null) continue;
+        await submitBotRoomVote(room, bot);
+        if (i < bots.length - 1 && room.phase === 'VOTE') {
+          await delayMs(fastMode || room.day <= 1 ? 1100 : 2800 + Math.floor(Math.random() * 1200));
+        }
+      }
+    } finally {
+      room.botVoteRunning = false;
+    }
+  }
+
+  /**
    * PROGRESSIVE DAY VOTE PHASE:
    * - Day 1: Open 1 unrevealed Room only
    * - Day 2: Open 1 Room OR Lock down 1 Horizontal Floor
@@ -912,6 +907,8 @@ async function startServer() {
    */
   function startRoomVotePhase(room: GameRoom): void {
     clearRoomTimers(room);
+    resetBotChatQueue(room);
+    room.botVoteRunning = false;
     room.phase = 'VOTE';
     room.phaseEndsAt = Date.now() + VOTE_DURATION_MS;
 
@@ -945,16 +942,16 @@ async function startServer() {
 
     broadcastRoomState(room);
 
-    const aliveBots = shuffle(getAlivePlayers(room).filter((p) => p.isBot));
-    aliveBots.forEach((bot, idx) => {
-      scheduleRoomTimer(
-        room,
-        () => {
-          void submitBotRoomVote(room, bot);
-        },
-        4500 + idx * 2200 + Math.floor(Math.random() * 1600)
-      );
-    });
+    // Run bot votes strictly sequentially (never parallel!)
+    scheduleRoomTimer(
+      room,
+      () => {
+        if (room.phase === 'VOTE') {
+          void runSequentialBotVotes(room, false);
+        }
+      },
+      3200
+    );
 
     scheduleRoomTimer(
       room,
@@ -1042,16 +1039,7 @@ async function startServer() {
       aliveHumans.length > 0 && aliveHumans.every((h) => h.dayVote !== null);
     if (!allHumansVoted) return;
 
-    const unvotedBots = getAlivePlayers(room).filter((p) => p.isBot && p.dayVote === null);
-    unvotedBots.forEach((bot, idx) => {
-      scheduleRoomTimer(
-        room,
-        () => {
-          void submitBotRoomVote(room, bot);
-        },
-        900 + idx * 700
-      );
-    });
+    void runSequentialBotVotes(room, true);
   }
 
   function checkAllVotedRoom(room: GameRoom): void {
@@ -1386,6 +1374,8 @@ async function startServer() {
 
   function startNightPhase(room: GameRoom): void {
     clearRoomTimers(room);
+    resetBotChatQueue(room);
+    room.botVoteRunning = false;
     room.phase = 'NIGHT';
     room.phaseEndsAt = Date.now() + NIGHT_DURATION_MS;
     room.night = freshNightSubmissions();
@@ -2048,7 +2038,9 @@ async function startServer() {
     room.aiThoughtsLoading = false;
     room.lastKeymasterLockedRoom = null;
     room.night = freshNightSubmissions();
-    room.conversationGenerationId += 1;
+    resetBotChatQueue(room);
+    room.botVoteRunning = false;
+    room.usedBankLines = new Set();
 
     pushChat(room, {
       senderId: 'SYSTEM',
@@ -2087,7 +2079,9 @@ async function startServer() {
     room.aiThoughtsLoading = false;
     room.lastKeymasterLockedRoom = null;
     room.night = freshNightSubmissions();
-    room.conversationGenerationId += 1;
+    resetBotChatQueue(room);
+    room.botVoteRunning = false;
+    room.usedBankLines = new Set();
 
     for (const [id, p] of room.players.entries()) {
       if (p.isBot || !p.connected) {
@@ -2186,6 +2180,10 @@ async function startServer() {
           lastChatAt: 0,
           botChatterCountThisPhase: 0,
           conversationGenerationId: 0,
+          botChatRunning: false,
+          botChatQueue: [],
+          botVoteRunning: false,
+          usedBankLines: new Set(),
           createdAt: Date.now(),
         };
 
@@ -2432,12 +2430,11 @@ async function startServer() {
       });
 
       const now = Date.now();
-      room.conversationGenerationId += 1;
-      if (now - room.lastHumanReplyAt > 3000 && room.botChatterCountThisPhase < 16) {
+      if (now - room.lastHumanReplyAt > 4000 && room.botChatterCountThisPhase < 10) {
         room.lastHumanReplyAt = now;
         const aliveBots = shuffle(getAlivePlayers(room).filter((p) => p.isBot));
         if (aliveBots.length > 0) {
-          // Prioritize bots explicitly mentioned by name, floor, or room in the human's message!
+          // Prioritize bots explicitly mentioned by name, floor, or room in the human's message
           const lowerText = cleanText.toLowerCase();
           const mentionedBots = aliveBots.filter((b) => {
             if (lowerText.includes(b.name.toLowerCase())) return true;
@@ -2449,20 +2446,15 @@ async function startServer() {
             return false;
           });
           const unmentionedBots = aliveBots.filter((b) => !mentionedBots.includes(b));
-          const responderCount = Math.min(aliveBots.length, aliveBots.length >= 2 && Math.random() < 0.7 ? 2 : 1);
+          const responderCount = Math.min(aliveBots.length, mentionedBots.length > 0 ? 1 : Math.random() < 0.45 ? 2 : 1);
           const chosenResponders = [...mentionedBots, ...unmentionedBots].slice(0, responderCount);
 
           room.botChatterCountThisPhase += chosenResponders.length;
-          scheduleRoomTimer(
-            room,
-            () => {
-              void triggerMultiBotExchange(room, chosenResponders, 'HUMAN_REPLY', {
-                senderName: player.name,
-                text: cleanText,
-              });
-            },
-            1050 + Math.floor(Math.random() * 550)
-          );
+          // Push into the SAME sequential loop (never concurrent!)
+          void runBotChatLoop(room, chosenResponders, 'HUMAN_REPLY', {
+            senderName: player.name,
+            text: cleanText,
+          });
         }
       }
     });
