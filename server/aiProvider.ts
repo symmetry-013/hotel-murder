@@ -1,8 +1,9 @@
-import { GoogleGenAI, HarmBlockThreshold, HarmCategory } from '@google/genai';
+import { GoogleGenAI, HarmBlockThreshold, HarmCategory, ThinkingLevel } from '@google/genai';
 import type {
   BotPostGameThought,
   ChatMessage,
   DayVoteChoice,
+  DeathCause,
   Faction,
   GamePhase,
   HotelColumnNumber,
@@ -18,14 +19,13 @@ import {
   getColumnOfRoom,
   getFloorOfRoom,
   getFloorsForCount,
-  getRoomsForFloorCount,
   getRoomsInColumn,
   getRoomsOnFloor,
   HOTEL_COLUMNS,
   ROLE_DEFINITIONS,
 } from '../src/shared/gameTypes.ts';
 
-export type ProviderChoice = 'groq' | 'gemini' | 'fallback';
+export type ProviderChoice = 'groq' | 'gemini';
 
 export interface BotPersonaTemplate {
   code: string;
@@ -47,6 +47,13 @@ export interface BotProfile {
   avatarColor: string;
 }
 
+export interface PastVoteRecord {
+  day: number;
+  winnerLabel: string;
+  summaryText: string;
+  votes: Array<{ voterName: string; targetLabel: string }>;
+}
+
 /**
  * 8 Distinct AI Personas (4 Male, 4 Female)
  */
@@ -54,65 +61,65 @@ export const BOT_PERSONAS: BotPersonaTemplate[] = [
   {
     code: 'M1',
     gender: 'M',
-    archetype: 'ชาย 1 · สายบวกหัวร้อน',
-    persona: 'ใจร้อน ชอบเปิดก่อน ใครพูดไม่เข้าหูโหวตทันที พูดจาโผงผาง กู-มึง ไอ้สัส',
-    speechStyle: 'โผงผาง ใจร้อน ท้าชนทันที ใช้คำแรงแบบเพื่อนซี้ เช่น ไอ้สัส เฮ้ย เปิดเลยดิ',
+    archetype: 'ชาย 1 · สายบวกหัวร้อน (Hothead)',
+    persona: 'ใจร้อน ชอบเปิดก่อน ใครพูดไม่เข้าหูหรือดูล่กโหวตทันที พูดจาโผงผางตรงไปตรงมา',
+    speechStyle: 'โผงผาง ใจร้อน ท้าชนทันที ใช้ภาษาเพื่อนซี้แรงๆ แบบผู้ชาย เช่น กู มึง ไอ้สัส เชี่ย แม่ง เปิดเลยดิ',
     avatarColor: '#B84A39',
   },
   {
     code: 'M2',
     gender: 'M',
-    archetype: 'ชาย 2 · สายเนิร์ดวิเคราะห์',
-    persona: 'ชอบจดสถิติ คำนวณความน่าจะเป็น พูดจามีเหตุผลแต่แอบกวนตีน',
-    speechStyle: 'ไล่เลขชั้น ไล่สถิติ ตัดช้อยส์เป็นเปอร์เซ็นต์ แต่แอบแซะเพื่อนแบบกวนตีนหน้านิ่ง',
+    archetype: 'ชาย 2 · สายเนิร์ดวิเคราะห์ (Cold Detective)',
+    persona: 'ชอบจดสถิติ ไล่เลขชั้น ไล่ผลโหวตเก่า คำนวณความน่าจะเป็น พูดจามีเหตุผลแต่แอบกวนตีนหน้านิ่ง',
+    speechStyle: 'ไล่เลขชั้น ไล่จำนวนคน ตัดช้อยส์เป็นตรรกะ แต่แอบแซะเพื่อนว่าคิดไม่เป็นแบบกวนตีน',
     avatarColor: '#4A6FA5',
   },
   {
     code: 'M3',
     gender: 'M',
-    archetype: 'ชาย 3 · สายปั่นกวนประสาท',
-    persona: 'ชอบพูดจาคลุมเครือ บลัฟเก่ง หลอกล่อให้คนอื่นระแวงกันเอง',
-    speechStyle: 'พูดกำกวม ยุให้คนอื่นตีกันเอง ชอบโยนเหยื่อล่อแล้วขำแห้งๆ',
+    archetype: 'ชาย 3 · สายปั่นกวนประสาท (Chaotic Troll)',
+    persona: 'ชอบพูดจาคลุมเครือ บลัฟเก่ง โยนระเบิดให้คนอื่นระแวงกันเอง ชอบเห็นวงแตก',
+    speechStyle: 'พูดกำกวม ยุให้เพื่อนตีกันเอง แหย่ให้คนอื่นหลุดพิรุธแล้วขำแห้งๆ ใช้คำว่า กู มึง แม่ง เหลี่ยม',
     avatarColor: '#B8863B',
   },
   {
     code: 'M4',
     gender: 'M',
-    archetype: 'ชาย 4 · สายนิ่งขรึมสังเกตการณ์',
-    persona: 'พูดน้อยต่อยหนัก มักรอให้คนอื่นเถียงกันเสร็จแล้วค่อยสรุปจี้จุดตาย',
-    speechStyle: 'สั้น นิ่ง เฉียบ คม จี้ตรงจุดที่คนอื่นพลาดแค่ประโยคเดียวจบ',
+    archetype: 'ชาย 4 · สายนิ่งขรึมสังเกตการณ์ (Calm Manipulator / Sharp Observer)',
+    persona: 'พูดน้อยต่อยหนัก สังเกตคำพูดขัดแย้งของคนอื่นแล้วสรุปจี้จุดตายทีเดียวอยู่',
+    speechStyle: 'สั้น นิ่ง เฉียบ คม จับคำพูดย้อนแย้งในแชทแล้วจี้ตรงจุดตายแบบเย็นชา',
     avatarColor: '#5B6D7A',
   },
   {
     code: 'F1',
     gender: 'F',
-    archetype: 'หญิง 1 · สายแซ่บปากแจ๋ว',
-    persona: 'ปากไว ด่าเจ็บ จับพิรุธเก่ง ใครโกหกโดนจี้จนไปไม่เป็น',
-    speechStyle: 'ปากไว ฟาดไม่ยั้ง จับโป๊ะคำพูดเพื่อนแรงๆ แบบตัวแม่วงเหล้า',
+    archetype: 'หญิง 1 · สายแซ่บปากแจ๋ว (Sassy Roaster)',
+    persona: 'ปากไว ด่าเจ็บ จับพิรุธเก่ง ใครตอแหลหรือพูดแถโดนจี้จนไปไม่เป็น',
+    speechStyle: 'ปากไว ฟาดไม่ยั้ง จับโป๊ะคำพูดเพื่อนแรงๆ แบบตัวแม่วงเหล้า เช่น อี... ไอ้... ตอแหล มึงอย่ามาเหลี่ยม',
     avatarColor: '#A63A5B',
   },
   {
     code: 'F2',
     gender: 'F',
-    archetype: 'หญิง 2 · สายแอ๊บใสขี้ระแวง',
-    persona: 'ทำตัวเหมือนคนขี้กลัว ชอบถามคนอื่นไปทั่ว แต่แอบเก็บข้อมูลเก่ง',
-    speechStyle: 'ทำเสียงตื่นกลัว ถามจี้ทีละคนว่าอยู่ชั้นไหน แต่แอบจำทุกคำตอบไว้เชือดทีหลัง',
+    archetype: 'หญิง 2 · สายแอ๊บใสขี้ระแวง (Innocent Actor / Drama Queen)',
+    persona: 'ทำตัวเหมือนคนขี้กลัวตกใจง่าย ชอบถามเช็กคนอื่นไปทั่ว แต่แอบเก็บข้อมูลเก่งและระแวงทุกคน',
+    speechStyle: 'โวยวายตื่นตูม ถามจี้ทีละคนว่าอยู่ชั้นไหนเมื่อกี้ทำไมพูดงี้ แอ๊บใสแต่แอบเชือดเงียบๆ',
     avatarColor: '#7A5C99',
   },
   {
     code: 'F3',
     gender: 'F',
-    archetype: 'หญิง 3 · สายลุยเจ้าแผนการ',
-    persona: 'ชอบเป็นผู้นำ สั่งการให้คนอื่นเปิดข้อมูลและคุมจังหวะการโหวต',
-    speechStyle: 'สั่งการชัดเจน คุมเกม บอกให้ทุกคนเปิดเบาะแสแล้วนัดโหวตไปทางเดียวกัน',
+    archetype: 'หญิง 3 · สายลุยเจ้าแผนการ (Tactical Leader)',
+    persona: 'ชอบเป็นผู้นำ สั่งการให้คนอื่นเปิดข้อมูลเทียบกันและคุมจังหวะการโหวตทั้งห้อง',
+    speechStyle: 'เด็ดขาด คุมเกม สั่งให้คนมีเบาะแสคายข้อมูลแล้วรวมเสียงโหวตไปทางเดียวกัน',
     avatarColor: '#3D828A',
   },
   {
     code: 'F4',
     gender: 'F',
-    archetype: 'หญิง 4 · สายติสท์เดาใจยาก',
-    persona: 'พูดจาแปลกๆ เหมือนเมาตลอดเวลา ทำให้คนเดาไม่ออกว่าเป็นคนเมาหรือคนดี',
-    speechStyle: 'พูดเพี้ยนๆ เหมือนคนเมา ล่องลอย ชวนสับสนจนคนอื่นไม่กล้าฟันธงว่าเป็นคนเมาหรือคนดี',
+    archetype: 'หญิง 4 · สายติสท์เดาใจยาก (Unpredictable Wildcard)',
+    persona: 'พูดจาแปลกๆ เหมือนเมาตลอดเวลาหรือคิดนอกกรอบ ทำให้คนเดาไม่ออกว่าเป็นคนเมาหรือคนดี',
+    speechStyle: 'พูดเพี้ยนๆ ล่องลอย กวนประสาทแบบชิลๆ ชวนสับสนจนคนอื่นเดาทางไม่ออก',
     avatarColor: '#8C6239',
   },
 ];
@@ -194,7 +201,6 @@ export function createRoundBotProfiles(
   const malePersonas = shuffleArray(BOT_PERSONAS.filter((p) => p.gender === 'M'));
   const femalePersonas = shuffleArray(BOT_PERSONAS.filter((p) => p.gender === 'F'));
 
-  // Interleave M and F randomly so every room has a balanced male/female mix
   const startWithMale = Math.random() < 0.5;
   const interleaved: BotPersonaTemplate[] = [];
   for (let i = 0; i < 4; i++) {
@@ -234,26 +240,63 @@ export function createRoundBotProfiles(
   }));
 }
 
-const CORE_PERSONA_INSTRUCTION = `คุณกำลังเล่นบอร์ดเกมสืบสวนฆาตกรรม "HOTEL MURDER ปริศนาโรงแรมมรณะ" (โรงแรมมีจำนวนชั้น = จำนวนผู้เล่น - 1 ชั้น × 3 แถวแนวตั้ง, ห้ามย้ายห้องตลอดเกม) กับกลุ่มเพื่อนซี้ในวงเหล้า
+const CORE_PERSONA_INSTRUCTION = `คุณกำลังสวมบทบาทเป็นผู้เล่นในบอร์ดเกมสืบสวนฆาตกรรม "HOTEL MURDER ปริศนาโรงแรมมรณะ" กับแก๊งเพื่อนซี้ในวงเหล้า
 
-กฎเหล็กที่ต้องรู้เสมอ:
-1. เมื่อมีคนตาย (ไม่ว่าโดนฆ่ากลางคืนหรือโดนโหวตกลางวัน) จะ **ไม่เปิดเผยบทบาทของผู้ตาย** จนกว่าจะจบเกม! (รู้แค่ชื่อกับเลขห้องที่พบศพ) ห้ามเดาเหมือนรู้บทบาทคนตาย!
-2. ระบบปลดล็อกโหวตช่วงกลางวันแบบขั้นบันได (คะแนนสูงสุดชนะ):
-   - วันที่ 1 (Day 1): โหวตได้เฉพาะ "เปิด 1 ห้อง (รายห้อง)" เท่านั้น! (ห้ามเสนอปิดชั้นหรือปิดแถวในวันที่ 1 เพราะยังไม่ปลดล็อก!)
-   - วันที่ 2 (Day 2): ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน (Horizontal Floor)" (ยังปิดแถวแนวตั้งไม่ได้ ต้องรอวันที่ 3!)
-   - วันที่ 3 และ วันที่ 4 (Day 3 - Day 4): ปลดล็อกเต็มรูปแบบ โหวตได้ครบทั้ง 3 แบบ คือ "รายห้อง", "ปิดตาย 1 ชั้นแนวนอน", และ "ปิดตาย 1 แถวแนวตั้ง (Vertical Column)"!
-   * ถ้าปิดพื้นที่แล้วโดน "ฆาตกร" -> ฝ่ายผู้บริสุทธิ์ชนะทันที!
-   * ถ้าปิดพื้นที่แล้วโดน "คนเมา" (โดยไม่มีฆาตกร) -> คนเมาชนะเดี่ยวทันที!
+กติกาหลักของเกมที่ต้องยึดถือ 100%:
+1. โครงสร้างโรงแรม: มีจำนวนชั้น = จำนวนผู้เล่น - 1 ชั้น (ชั้นละ 3 ห้องคือ x01, x02, x03) ผู้เล่นทุกคนได้ห้องพักประจำตัวถาวรตั้งแต่เริ่มเกม ห้ามย้ายห้อง! และมองเห็นเฉพาะห้องของตัวเองเท่านั้น (Strict Fog of War)
+2. เมื่อมีผู้เล่นเสียชีวิต (ไม่ว่าถูกฆาตกรฆ่าตอนกลางคืน หรือถูกโหวตเปิดห้อง/ปิดตายตอนกลางวัน) ระบบจะ **ไม่เปิดเผยบทบาทของผู้ตาย** จนกว่าเกมจะจบ! (รู้แค่ชื่อ ห้อง และสาเหตุการตาย) ห้ามทำเป็นรู้บทบาทของคนตายเด็ดขาด!
+3. การปลดล็อกโหวตช่วงกลางวันแบบขั้นบันได (คะแนนสูงสุดชนะ):
+   - วันที่ 1 (Day 1): โหวตได้เฉพาะ "เปิด 1 ห้อง (รายห้อง)" เท่านั้น! ห้ามเสนอปิดชั้นหรือปิดแถวในวันที่ 1
+   - วันที่ 2 (Day 2): ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน (Horizontal Floor)" (ยังปิดแถวแนวตั้งไม่ได้ ต้องรอวันที่ 3)
+   - วันที่ 3 และ วันที่ 4 (Day 3 - Day 4): ปลดล็อกครบ 3 แบบ คือ "เปิด 1 ห้อง", "ปิดตาย 1 ชั้นแนวนอน", และ "ปิดตาย 1 แถวแนวตั้ง (Vertical Column)"
+   * ถ้าผลโหวตกำจัด "ฆาตกร" ได้ -> ฝ่ายผู้บริสุทธิ์ชนะทันที!
+   * ถ้าผลโหวตกำจัด "คนเมา" (โดยฆาตกรไม่โดนไปด้วย) -> คนเมาชนะเดี่ยวทันที!
+   * ถ้าฝ่ายฆาตกรเหลือเท่ากับหรือมากกว่าผู้บริสุทธิ์ หรือครบกำหนดวันโดยฆาตกรยังรอด -> ฝ่ายฆาตกรชนะ!
 
-กฎการพูดและการสวมบทบาท (บังคับเด็ดขาด):
-1. คิดวิเคราะห์เองอย่างอิสระจากประวัติแชทล่าสุด + เบาะแสสกิลส่วนตัว + นิสัยประจำตัวของมึง ห้ามใช้ประโยคซ้ำซากหรือพูดเหมือนหุ่นยนต์
-2. ใช้ภาษาไทยแบบภาษาปากเพื่อนสนิท กู-มึง แซว/จี้/โต้เถียงกันตรงไปตรงมาตามบุคลิกของตัวละครมึง
-3. ห้ามพูดจาสุภาพเด็ดขาด! ห้ามลงท้ายว่า "ครับ", "ค่ะ", "นะครับ", "นะคะ", "ครับผม", "คุณ", "ผม", "ดิฉัน"
-4. พิมพ์สั้น กระชับ 1-2 ประโยค ไม่เกิน 170 ตัวอักษร เหมือนพิมพ์แชทสดๆ ห้ามขึ้นต้นด้วยชื่อตัวเอง ห้ามใส่เครื่องหมายคำพูดครอบประโยค
-5. กลยุทธ์ตามบทบาท:
-   - ฝ่ายผู้บริสุทธิ์: เอาเบาะแสจริงจากสกิล (แม่บ้าน/ช่างเช็ดกระจก/นักสืบ/พยาน) มาเทียบกับคำพูดเพื่อนในแชทเพื่อหาห้องฆาตกร
-   - ฝ่ายฆาตกร (ฆาตกร/ผู้ช่วยฆาตกร): ปั่นเบี่ยงประเด็นถ้าคนกำลังเล็งห้อง/ชั้น/แถวของทีมตัวเอง แต่อย่าทำตัวล่กเกินไป
-   - คนเมา (Drunk): ปั่นแชทหรือหลุดเบาะแสห้อง/ชั้น/แถวตัวเองแบบเนียนๆ เพื่อล่อให้คนอื่นโหวตโดนห้อง/ชั้น/แถวของมึง!`;
+หลักการคิดวิเคราะห์อิสระและภาษาพูด (บังคับเด็ดขาด):
+1. คิดวิเคราะห์สดๆ จากบริบทจริงทั้งหมด: ประวัติแชทล่าสุด ประวัติผลโหวตที่ผ่านมา รายชื่อคนเป็น/คนตาย และสมุดเบาะแสส่วนตัวของตัวละครมึง ห้ามใช้คำพูดซ้ำซาก ห้ามพูดเหมือนหุ่นยนต์ ห้ามท่องกฎเกม
+2. ใช้ภาษาไทยปากเปล่าแบบเพื่อนซี้วงเหล้าที่สนิทกันสุดๆ ("กู", "มึง", "ไอ้...", "อี...", "เชี่ย", "สัส", "แม่ง", "ตอแหล", "เหลี่ยม", "ล่ก") ให้เข้ากับเพศและนิสัยเฉพาะตัวของตัวละคร
+3. ห้ามใช้คำสุภาพเด็ดขาด! ห้ามมีคำว่า "ครับ", "ค่ะ", "นะครับ", "นะคะ", "ครับผม", "คุณ", "ผม", "ดิฉัน"
+4. ตอบโต้ตรงประเด็นกับสิ่งที่เพื่อนหรือผู้เล่นคนอื่นเพิ่งพูดในแชท (ถ้าโดนสงสัยหรือโดนพาดพิงชื่อ/ชั้น ต้องเถียงกลับหรือแก้ตัวตามบทบาท; ถ้ามีคนอ้างบทบาท ต้องคิดว่าจะเชื่อหรือจับโป๊ะ)
+5. พิมพ์สั้น กระชับ เป็นธรรมชาติ 1-3 ประโยคสั้นๆ ไม่เกิน 190 ตัวอักษร เหมือนพิมพ์แชทสดๆ ห้ามขึ้นต้นด้วยชื่อตัวเอง ห้ามใส่เครื่องหมายคำพูดครอบประโยค`;
+
+function buildRoleStrategyBrief(params: {
+  role: RoleId;
+  myRoom: HotelRoomNumber;
+  myFloor: HotelFloorNumber;
+  myColumn: HotelColumnNumber;
+  evilPartners: Array<{ name: string; role: RoleId; room?: HotelRoomNumber | null }>;
+}): string {
+  const { role, myRoom, myFloor, myColumn, evilPartners } = params;
+  const partnerDesc =
+    evilPartners.length > 0
+      ? evilPartners
+          .map(
+            (p) =>
+              `${p.name} (${ROLE_DEFINITIONS[p.role].nameTh}${p.room ? ` · ห้อง ${p.room} ชั้น ${getFloorOfRoom(p.room)} แถว ${getColumnOfRoom(p.room)}` : ''})`
+          )
+          .join(', ')
+      : 'ไม่มี';
+
+  switch (role) {
+    case 'MURDERER':
+      return `กลยุทธ์ลับ [ฆาตกร]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) คู่หูผู้ช่วยคือ ${partnerDesc} — จงเนียนเป็นคนดี โกหกอย่างมีชั้นเชิง ป้ายสีชั้น/แถว/คนอื่น ปกป้องผู้ช่วยแบบไม่ให้โจ่งแจ้ง ถ้าโดนจี้หรือคนใกล้เล็งชั้น ${myFloor} / แถว ${myColumn} ให้เบี่ยงประเด็นหรือแกล้งสวมรอยอ้างเบาะแสแม่บ้าน/ช่างเช็ดกระจก/นักสืบเพื่อดึงเสียงโหวตไปทางอื่น!`;
+    case 'ACCOMPLICE':
+      return `กลยุทธ์ลับ [ผู้ช่วยฆาตกร]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) คู่หูฆาตกรคือ ${partnerDesc} — ห้ามให้คนโหวตโดนห้อง/ชั้น/แถวของฆาตกรเด็ดขาด! ใช้ข้อมูลที่ส่องมาสร้างเรื่องป้ายสีคนดีหรือเบี่ยงโหวตไปชั้น/แถวปลอดภัย หรือแกล้งเปิดเบาะแสปลอมถ้าสถานการณ์คับขัน แต่อย่าทำตัวปกป้องฆาตกรโจ่งแจ้งจนโดนจับโป๊ะ!`;
+    case 'DETECTIVE':
+      return `กลยุทธ์ลับ [นักสืบ]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) — มึงสืบได้เฉพาะชั้นที่ผู้เล่นพัก (ไม่รู้ฝ่าย) จงคิดให้ฉลาดว่าจะเก็บข้อมูลไว้เทียบคำพูดคนอื่นก่อน หรือเปิดเผยชั้นของคนที่น่าสงสัยเพื่อจับโป๊ะคนโกหก (ระวังอย่าพาเพื่อนโหวตปิดชั้น ${myFloor} หรือแถว ${myColumn} ของตัวเอง!)`;
+    case 'HOUSEKEEPER':
+      return `กลยุทธ์ลับ [แม่บ้าน]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) — เบาะแสจำนวนคนรอดแต่ละชั้นของมึงโคตรสำคัญ! คิดให้ดีว่าจะคายตัวเลขชั้นไหนตอนไหนเพื่อตัดช้อยส์ห้องว่างหรือนำโหวตปิดชั้นที่มีฆาตกรซ่อนอยู่ (อย่าเผลอพาเพื่อนปิดชั้น ${myFloor} ของตัวเอง!)`;
+    case 'GLAZIER':
+      return `กลยุทธ์ลับ [ช่างเช็ดกระจก]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) — เบาะแสจำนวนคนรอดแต่ละแถวแนวตั้ง (x01/x02/x03) ของมึงใช้ตัดช้อยส์หรือนำโหวตปิดแถวในวันที่ 3-4 ได้ดีมาก! เอาตัวเลขจริงมาเทียบกับแชทเพื่อนเพื่อจับพิรุธ (อย่าพาเพื่อนปิดแถว ${myColumn} ของตัวเอง!)`;
+    case 'WITNESS':
+      return `กลยุทธ์ลับ [พยาน]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) — ถ้าคืนไหนมึงเฝ้าตรงชั้นเกิดเหตุจนรู้ทิศทางชั้นฆาตกร (สูงกว่า/ต่ำกว่า/ชั้นเดียวกัน) นั่นคือเบาะแสระดับเชือด! ตัดสินใจให้ฉลาดว่าจะเปิดเผยทันทีเพื่อบีบวงฆาตกรหรือซุ่มดูคนล่กก่อน`;
+    case 'KEYMASTER':
+      return `กลยุทธ์ลับ [ช่างกุญแจ]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) — ห้ามหลุดบอกเด็ดขาดว่าคืนหน้าจะล็อกห้องไหน! ถ้าคืนก่อนมึงล็อกกันฆาตกรได้สำเร็จให้ใช้เป็นจุดสังเกตและวิเคราะห์ร่วมกับแชทเพื่อช่วยฝั่งคนดีจับฆาตกร`;
+    case 'DRUNK':
+      return `กลยุทธ์ลับ [คนเมา - ชนะเดี่ยว]: ห้องมึงคือ ${myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) — เป้าหมายเดียวคือปั่นให้คนอื่นหมั่นไส้หรือระแวงจนโหวตเปิดห้อง ${myRoom} หรือปิดตายชั้น ${myFloor}/แถว ${myColumn} (โดยไม่มีฆาตกรโดน) มึงจะชนะเดี่ยวทันที! พูดกวนๆ หรือแกล้งทำตัวมีพิรุธหลุดพิกัดแบบเนียนๆ แต่อย่าพูดโต้งๆ ว่าเป็นคนเมาเพราะเพื่อนจะรู้ทันไม่โหวตมึง!`;
+  }
+}
 
 let geminiClient: GoogleGenAI | null = null;
 
@@ -284,11 +327,31 @@ function getGroqConfig(): { apiKey: string; model: string } | null {
   return { apiKey, model };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('429') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('AbortError') ||
+    msg.includes('fetch failed') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('ETIMEDOUT')
+  );
+}
+
 function sanitizeThaiColloquial(raw: string): string {
   let text = raw
     .trim()
     .replace(/^["'「『]+|["'」』]+$/g, '')
-    .replace(/^(ชื่อ|บอท|ตอบ)\s*[:：]\s*/i, '')
+    .replace(/^(ชื่อ|บอท|ตอบ|ข้อความ)\s*[:：]\s*/i, '')
     .replace(/\s+/g, ' ');
 
   text = text
@@ -297,8 +360,8 @@ function sanitizeThaiColloquial(raw: string): string {
     .replace(/\bผม\b/g, 'กู')
     .replace(/\bดิฉัน\b/g, 'กู');
 
-  if (text.length > 185) {
-    text = text.slice(0, 182).trim() + '...';
+  if (text.length > 210) {
+    text = text.slice(0, 207).trim() + '...';
   }
   return text;
 }
@@ -306,13 +369,14 @@ function sanitizeThaiColloquial(raw: string): string {
 async function callGroq(
   systemPrompt: string,
   userPrompt: string,
-  expectJson = false
+  expectJson = false,
+  maxTokens = expectJson ? 1100 : 210
 ): Promise<string> {
   const cfg = getGroqConfig();
   if (!cfg) throw new Error('GROQ_NOT_CONFIGURED');
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9500);
+  const timeout = setTimeout(() => controller.abort(), 11000);
 
   try {
     const body: Record<string, unknown> = {
@@ -321,8 +385,8 @@ async function callGroq(
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: expectJson ? 0.45 : 0.92,
-      max_tokens: expectJson ? 800 : 165,
+      temperature: expectJson ? 0.65 : 0.92,
+      max_tokens: maxTokens,
     };
     if (expectJson) {
       body.response_format = { type: 'json_object' };
@@ -340,7 +404,7 @@ async function callGroq(
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw new Error(`GROQ_HTTP_${res.status}: ${errText.slice(0, 140)}`);
+      throw new Error(`GROQ_HTTP_${res.status}: ${errText.slice(0, 160)}`);
     }
 
     const data = (await res.json()) as {
@@ -377,10 +441,16 @@ async function callGemini(
   const ai = getGeminiClient();
   if (!ai) throw new Error('GEMINI_NOT_CONFIGURED');
 
-  const configuredPrimary = process.env.GEMINI_MODEL_PRIMARY?.trim() || 'gemini-3.5-flash-lite';
+  const configuredPrimary = process.env.GEMINI_MODEL_PRIMARY?.trim();
   const candidateModels = resolvedGeminiModel
     ? [resolvedGeminiModel]
-    : Array.from(new Set([configuredPrimary, 'gemini-3.1-flash-lite', 'gemini-4-hydrogen']));
+    : Array.from(
+        new Set(
+          [configuredPrimary, 'gemini-4-hydrogen', 'gemini-3.1-flash-lite'].filter(
+            (m): m is string => Boolean(m)
+          )
+        )
+      );
 
   let lastError: unknown = null;
 
@@ -392,6 +462,9 @@ async function callGemini(
       };
       if (expectJson) {
         config.responseMimeType = 'application/json';
+      }
+      if (modelName.startsWith('gemini-4-')) {
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
       }
 
       const response = await ai.models.generateContent({
@@ -421,24 +494,32 @@ async function generateWithMultiProvider(
   preferred: 'groq' | 'gemini',
   systemPrompt: string,
   userPrompt: string,
-  expectJson = false
-): Promise<{ text: string; provider: 'groq' | 'gemini' }> {
+  expectJson = false,
+  maxTokens?: number
+): Promise<{ text: string; provider: ProviderChoice }> {
   const hasGroq = Boolean(getGroqConfig());
   const hasGemini = Boolean(getGeminiClient());
-  const order: Array<'groq' | 'gemini'> =
+  const order: ProviderChoice[] =
     preferred === 'groq' ? ['groq', 'gemini'] : ['gemini', 'groq'];
   const activeOrder = order.filter((p) => (p === 'groq' ? hasGroq : hasGemini));
 
   let lastErr: unknown = null;
   for (const provider of activeOrder) {
-    try {
-      const text =
-        provider === 'groq'
-          ? await callGroq(systemPrompt, userPrompt, expectJson)
-          : await callGemini(systemPrompt, userPrompt, expectJson);
-      return { text, provider };
-    } catch (err) {
-      lastErr = err;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const text =
+          provider === 'groq'
+            ? await callGroq(systemPrompt, userPrompt, expectJson, maxTokens)
+            : await callGemini(systemPrompt, userPrompt, expectJson);
+        return { text, provider };
+      } catch (err) {
+        lastErr = err;
+        if (attempt === 0 && isTransientError(err)) {
+          await sleep(450 + Math.floor(Math.random() * 350));
+          continue;
+        }
+        break;
+      }
     }
   }
 
@@ -464,6 +545,91 @@ export interface FogBotContextPlayer {
   name: string;
   alive: boolean;
   isBot: boolean;
+  deathCause: DeathCause;
+  deathDay: number | null;
+  deathRoom: HotelRoomNumber | null;
+}
+
+function formatGameStateContext(params: {
+  day: number;
+  maxDays: number;
+  phase: GamePhase;
+  totalFloors: number;
+  players: FogBotContextPlayer[];
+  revealedRooms: RevealedRoomInfo[];
+  lockedFloors: HotelFloorNumber[];
+  lockedColumns: HotelColumnNumber[];
+  morningHeadline: string | null;
+  pastVoteRecords: PastVoteRecord[];
+  recentChat: ChatMessage[];
+}): string {
+  const aliveList = params.players
+    .filter((p) => p.alive)
+    .map((p) => p.name)
+    .join(', ');
+
+  // STRICT NO ROLE REVEAL ON DEATH: Include only name, room, day, and death cause (Night Murder vs Day Execution)
+  const deadList = params.players
+    .filter((p) => !p.alive)
+    .map((p) => {
+      const causeText =
+        p.deathCause === 'MURDERED'
+          ? 'ถูกฆาตกรสังหารตอนกลางคืน'
+          : 'ถูกโหวตเปิดห้อง/ปิดตายตอนกลางวัน';
+      return `${p.name} (ห้อง ${p.deathRoom ?? '?'}, ตายวัน/คืนที่ ${p.deathDay ?? '?'}, ${causeText} — ไม่เปิดเผยบทบาท)`;
+    })
+    .join('\n- ');
+
+  const revealedSummary = params.revealedRooms
+    .map((r) =>
+      r.kind === 'INITIAL_CRIME'
+        ? `${r.room}(ศพตั้งต้น-ว่าง)`
+        : r.kind === 'EMPTY_LYNCHED'
+          ? `${r.room}(เปิดแล้ว-ว่าง)`
+          : r.kind === 'LOCKED_EMPTY'
+            ? `${r.room}(ปิดตาย-ว่าง)`
+            : `${r.room}(ศพ ${r.occupantName ?? 'ผู้เล่น'}: เสียชีวิต-ไม่เปิดเผยบทบาท)`
+    )
+    .join(', ');
+
+  const voteHistoryBlock =
+    params.pastVoteRecords.length > 0
+      ? params.pastVoteRecords
+          .map((rec) => {
+            const detail = rec.votes.map((v) => `${v.voterName}->${v.targetLabel}`).join(', ');
+            return `วันที่ ${rec.day}: ผล=${rec.winnerLabel} | ${rec.summaryText}\n  คะแนนรายคน: ${detail}`;
+          })
+          .join('\n')
+      : 'ยังไม่มีประวัติการโหวต (เพิ่งเริ่มเกม)';
+
+  const voteUnlockNote =
+    params.day <= 1
+      ? 'วันที่ 1: โหวตได้เฉพาะ "เปิด 1 ห้อง (รายห้อง)" เท่านั้น! (ปิดชั้นปลดวันที่ 2, ปิดแถวปลดวันที่ 3)'
+      : params.day === 2
+        ? 'วันที่ 2: ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน" แล้ว! (ปิดแถวแนวตั้งยังไม่ปลด ต้องรอวันที่ 3)'
+        : `วันที่ ${params.day}: ปลดล็อกเต็มรูปแบบครบทั้ง 3 แบบแล้ว! ("เปิด 1 ห้อง" / "ปิดตาย 1 ชั้นแนวนอน" / "ปิดตาย 1 แถวแนวตั้ง")`;
+
+  const chatHistory = params.recentChat
+    .slice(-15)
+    .map((m) => (m.isSystem ? `[ระบบ] ${m.text}` : `${m.senderName}: ${m.text}`))
+    .join('\n');
+
+  return [
+    `=== สถานะเกมปัจจุบัน ===`,
+    `วัน/เฟส: วันที่ ${params.day}/${params.maxDays} (${params.phase}) | โรงแรมมี ${params.totalFloors} ชั้น (ชั้น 1 ถึง ${params.totalFloors}, ชั้นละ 3 ห้อง x01-x03)`,
+    `กติกาโหวตวันนี้: ${voteUnlockNote}`,
+    `ชั้นที่ปิดตายแล้ว: ${params.lockedFloors.length > 0 ? params.lockedFloors.join(', ') : 'ยังไม่มี'} | แถวที่ปิดตายแล้ว: ${params.lockedColumns.length > 0 ? params.lockedColumns.join(', ') : 'ยังไม่มี'}`,
+    params.morningHeadline ? `ข่าวเมื่อเช้า: ${params.morningHeadline}` : '',
+    `ห้องที่เปิด/ปิดตายแล้ว: ${revealedSummary || 'ยังไม่มี'}`,
+    `ผู้รอดชีวิต (${params.players.filter((p) => p.alive).length} คน): ${aliveList}`,
+    deadList ? `ผู้เสียชีวิต (ห้ามเดาบทบาทเพราะยังไม่เฉลย):\n- ${deadList}` : 'ผู้เสียชีวิต: ยังไม่มีใครตาย',
+    `ประวัติการโหวตที่ผ่านมา:\n${voteHistoryBlock}`,
+    chatHistory
+      ? `=== ประวัติแชทล่าสุด (15 ข้อความล่าสุด) ===\n${chatHistory}`
+      : '=== ประวัติแชทล่าสุด ===\n(ยังไม่มีใครพิมพ์ในแชท)',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 export interface BotChatInput {
@@ -480,150 +646,73 @@ export interface BotChatInput {
   lockedFloors: HotelFloorNumber[];
   lockedColumns: HotelColumnNumber[];
   players: FogBotContextPlayer[];
+  pastVoteRecords: PastVoteRecord[];
   recentChat: ChatMessage[];
   morningHeadline: string | null;
-  evilPartners: string[];
+  evilPartners: Array<{ name: string; role: RoleId; room?: HotelRoomNumber | null }>;
   privateClues: PrivateClueLog[];
-  triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'PRE_READY';
+  triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'PRE_READY' | 'BOT_BANTER';
   lastHumanMessage?: { senderName: string; text: string };
 }
 
-function buildEmergencyOfflineChat(input: BotChatInput): string {
-  const activeRooms = getRoomsForFloorCount(input.totalFloors);
-  const activeFloors = getFloorsForCount(input.totalFloors);
-  const revealedSet = new Set(input.revealedRooms.map((r) => r.room));
-  const unrevealed = activeRooms.filter((r) => !revealedSet.has(r) && r !== input.myRoom);
-  const sampleRoom = unrevealed[Math.floor(Math.random() * Math.max(1, unrevealed.length))] ?? activeRooms[0];
-  const openFloors = activeFloors.filter((f) => !input.lockedFloors.includes(f));
-  const openCols = HOTEL_COLUMNS.filter((c) => !input.lockedColumns.includes(c));
-  const latestClue = input.privateClues[input.privateClues.length - 1];
-
-  const canFloorLock = input.day >= 2;
-  const canColLock = input.day >= 3;
-  const otherFloor = openFloors.find((f) => f !== input.myFloor) ?? openFloors[0] ?? 2;
-  const otherCol = openCols.find((c) => c !== input.myColumn) ?? openCols[0] ?? 2;
-
-  if (input.role === 'DRUNK') {
-    if (canColLock) {
-      return `อย่ามายุ่งกับห้อง ${input.myRoom} หรือปิดแถว ${input.myColumn} นะโว้ย กูอยู่เงียบๆ ของกูดีๆ`;
-    }
-    if (canFloorLock) {
-      return `เฮ้ยอย่ามาปิดชั้น ${input.myFloor} นะเว้ย กูไม่ได้ทำอะไรผิดเลย อย่าโหวตโดนชั้นนี้เด็ดขาด`;
-    }
-    return `ใครกล้าเปิดห้อง ${input.myRoom} มึงมีเรื่องกับกูแน่ กูแค่แขกธรรมดาโว้ย`;
-  }
-
-  if (ROLE_DEFINITIONS[input.role].faction === 'GOOD' && latestClue) {
-    if (canColLock && latestClue.category === 'GLAZIER') {
-      return `${latestClue.detail} — วันนี้ปลดปิดแถวแล้ว ตัดใจโหวตปิดแถวเลยมั้ยพวกมึง`;
-    }
-    if (canFloorLock && latestClue.category === 'HOUSEKEEPER') {
-      return `${latestClue.detail} — วันนี้ปิดชั้นแนวนอนได้แล้วนะเว้ย ลองดูมั้ยว่าจะกวาดชั้นไหน`;
-    }
-    return `เบาะแสคืนล่าสุดของกู: ${latestClue.detail} ลองเทียบกับแชทเมื่อกี้ดูดิ`;
-  }
-
-  if (ROLE_DEFINITIONS[input.role].faction === 'EVIL') {
-    const recentText = input.recentChat.slice(-5).map((m) => m.text).join(' ');
-    const floorThreatened =
-      recentText.includes(`ชั้น ${input.myFloor}`) || recentText.includes(`ชั้น${input.myFloor}`);
-    const colThreatened =
-      recentText.includes(`แถว ${input.myColumn}`) || recentText.includes(`แถว${input.myColumn}`);
-    if (canFloorLock && floorThreatened) {
-      return `อย่าไปปิดชั้น ${input.myFloor} มั่วดิ เดี๋ยวคนดีตายฟรีหมด ไปดูชั้น ${otherFloor} ดีกว่าเยอะ`;
-    }
-    if (canColLock && colThreatened) {
-      return `ปิดแถว ${input.myColumn} โคตรเสี่ยงเลยนะเว้ย ไปปิดแถว ${otherCol} หรือเปิดห้อง ${sampleRoom} แทนดิ`;
-    }
-    if (canColLock) return `เหลือเวลาน้อยแล้ว ลองปิดแถว ${otherCol} หรือปิดชั้น ${otherFloor} วัดใจไปเลยมั้ย`;
-    if (canFloorLock) return `วันนี้ปิดชั้นได้แล้ว ลองเช็กชั้น ${otherFloor} หรือเปิดห้อง ${sampleRoom} ดูดิ`;
-    return `วันแรกยังปิดชั้นไม่ได้ ลองโหวตเปิดห้อง ${sampleRoom} ตัดช้อยส์ดูก่อนมั้ยพวกมึง`;
-  }
-
-  if (input.lastHumanMessage) {
-    const target = input.lastHumanMessage.senderName;
-    return canFloorLock
-      ? `เดี๋ยวนะ ${target} พูดงี้ชักแปลกๆ ว่ะ มึงอยู่ชั้นไหนแน่ ลองเปิดห้อง ${sampleRoom} หรือปิดชั้น ${otherFloor} ดูมั้ย`
-      : `เดี๋ยวนะ ${target} พูดงี้โคตรมีพิรุธ วันแรกเปิดห้อง ${sampleRoom} ตัดช้อยส์ก่อนเลยมั้ย`;
-  }
-
-  if (canColLock) {
-    return `วันที่ ${input.day} ปลดครบทั้งเปิดห้อง ปิดชั้น ปิดแถวแล้ว ใครมีเบาะแสแม่บ้าน/ช่างเช็ดกระจกรีบคายออกมาเลย`;
-  }
-  if (canFloorLock) {
-    return `วันที่ 2 ปิดชั้นแนวนอนได้แล้วนะเว้ย (ปิดแถวรอวันที่ 3) ใครได้เบาะแสชั้นไหนรีบแชร์ด่วน`;
-  }
-  return `วันแรกโหวตได้เฉพาะเปิดรายห้อง ลองตัดช้อยส์จากห้องศพตั้งต้นแล้วจิ้มห้อง ${sampleRoom} ดูมั้ย`;
-}
-
+/**
+ * 100% Autonomous Single-Bot Chat via live LLM (ZERO hardcoded templates).
+ * Returns null if all configured LLM providers fail after retry.
+ */
 export async function generateBotChat(
   input: BotChatInput
-): Promise<{ text: string; provider: ProviderChoice }> {
+): Promise<{ text: string; provider: ProviderChoice } | null> {
   const roleDef = ROLE_DEFINITIONS[input.role];
-  const aliveNames = input.players
-    .filter((p) => p.alive)
-    .map((p) => p.name)
-    .join(', ');
-
-  // STRICT NO ROLE REVEAL ON DEATH: Bots only know dead players' name & room, NEVER their role!
-  const revealedSummary = input.revealedRooms
-    .map((r) =>
-      r.kind === 'INITIAL_CRIME'
-        ? `${r.room}(ศพตั้งต้น-ว่าง)`
-        : r.kind === 'EMPTY_LYNCHED'
-          ? `${r.room}(ห้องว่าง)`
-          : r.kind === 'LOCKED_EMPTY'
-            ? `${r.room}(ปิดตาย-ว่าง)`
-            : `${r.room}(พบศพ ${r.occupantName ?? 'ผู้เล่น'}: เสียชีวิต-ไม่เปิดเผยบทบาท)`
-    )
-    .join(', ');
-
-  const chatHistory = input.recentChat
-    .slice(-14)
-    .map((m) => (m.isSystem ? `[ระบบ] ${m.text}` : `${m.senderName}: ${m.text}`))
-    .join('\n');
-
   const clueStrings = input.privateClues
-    .slice(-6)
+    .slice(-8)
     .map((c) => `[คืน ${c.night} - ${c.title}] ${c.detail}`);
 
-  const voteUnlockNote =
-    input.day <= 1
-      ? 'วันที่ 1: โหวตได้เฉพาะ "เปิด 1 ห้อง (รายห้อง)" เท่านั้น! (ปิดชั้นปลดวันที่ 2, ปิดแถวปลดวันที่ 3)'
-      : input.day === 2
-        ? 'วันที่ 2: ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน" แล้ว! (ปิดแถวแนวตั้งยังไม่ปลด ต้องรอวันที่ 3)'
-        : `วันที่ ${input.day}: ปลดล็อกเต็มรูปแบบครบทั้ง 3 แบบแล้ว! ("เปิด 1 ห้อง" / "ปิดตาย 1 ชั้นแนวนอน" / "ปิดตาย 1 แถวแนวตั้ง")`;
+  const roleMission = buildRoleStrategyBrief({
+    role: input.role,
+    myRoom: input.myRoom,
+    myFloor: input.myFloor,
+    myColumn: input.myColumn,
+    evilPartners: input.evilPartners,
+  });
 
-  const roleMission =
-    input.role === 'DRUNK'
-      ? `เป้าหมายลับของมึง (คนเมา): มึงต้องปั่นหรือแกล้งหลุดข้อมูลชั้น ${input.myFloor} แถว ${input.myColumn} (ห้อง ${input.myRoom}) แบบเนียนๆ ให้เพื่อนโหวตโดนมึง (ถ้าไม่มีฆาตกรโดนไปด้วย มึงชนะเดี่ยวทันที!)`
-      : roleDef.faction === 'EVIL'
-        ? `เป้าหมายลับของมึง (ฝ่ายฆาตกร): ห้องมึงอยู่ชั้น ${input.myFloor} แถว ${input.myColumn} เพื่อนร่วมฝ่ายคือ: ${input.evilPartners.join(', ') || 'ไม่มี'} — ถ้าเพื่อนเล็งห้อง/ชั้น/แถวของทีมมึง ให้เบี่ยงประเด็นแบบเนียนตามบุคลิกตัวเอง!`
-        : `เป้าหมายลับของมึง (ฝ่ายผู้บริสุทธิ์): เอาเบาะแสสกิลส่วนตัวมาวิเคราะห์ร่วมกับแชทเพื่อนเพื่อจับฆาตกร (ระวังอย่าพาเพื่อนโหวตปิดชั้น ${input.myFloor} หรือแถว ${input.myColumn} ที่มึงอยู่เอง!)`;
+  const sharedContext = formatGameStateContext({
+    day: input.day,
+    maxDays: input.maxDays,
+    phase: input.phase,
+    totalFloors: input.totalFloors,
+    players: input.players,
+    revealedRooms: input.revealedRooms,
+    lockedFloors: input.lockedFloors,
+    lockedColumns: input.lockedColumns,
+    morningHeadline: input.morningHeadline,
+    pastVoteRecords: input.pastVoteRecords,
+    recentChat: input.recentChat,
+  });
+
+  const genderLabel = input.bot.gender === 'M' ? 'ชาย' : 'หญิง';
+  const taskDirective =
+    input.triggerReason === 'HUMAN_REPLY' && input.lastHumanMessage
+      ? `เพื่อนชื่อ "${input.lastHumanMessage.senderName}" เพิ่งพิมพ์ว่า: "${input.lastHumanMessage.text}" — จงคิดวิเคราะห์สดๆ แล้วตอบโต้โดยตรงให้เข้ากับบทบาท เบาะแสส่วนตัว และนิสัย "${input.bot.archetype}" ของมึง (ถ้ามันพาดพิงชื่อ/ชั้น/แถวของมึง ให้แก้ตัวหรือโต้กลับให้เนียน!)`
+      : input.triggerReason === 'PRE_READY'
+        ? `มึงกำลังจะกด "พร้อมโหวต" แล้ว จงพูดสรุปจุดยืน/เป้าหมายที่มึงอยากให้เพื่อนโหวต หรือกดดันเพื่อนให้รีบตัดสินใจตามนิสัย "${input.bot.archetype}"`
+        : input.triggerReason === 'BOT_BANTER'
+          ? `อ่านบทสนทนาล่าสุดในห้องแชทแล้วโผล่เข้าไปโต้แย้ง ซักไซ้ แซะ หรือต่อยอดคำพูดของเพื่อนคนก่อนหน้าอย่างเป็นธรรมชาติตามนิสัย "${input.bot.archetype}"`
+          : `เพิ่งเปิดช่วงสนทนาวันใหม่ จงเปิดประเด็นวิเคราะห์ข่าวเมื่อเช้า เบาะแสส่วนตัว หรือจับพิรุธเพื่อนในห้องอย่างอิสระตามนิสัย "${input.bot.archetype}"`;
 
   const userPrompt = [
-    `ชื่อมึง: "${input.bot.name}" (${input.bot.archetype})`,
-    `บุคลิกเฉพาะตัวของมึง: ${input.bot.persona}`,
-    `สไตล์การพูดของมึง: ${input.bot.speechStyle}`,
-    `โรงแรมรอบนี้มีทั้งหมด ${input.totalFloors} ชั้น (ชั้น 1 ถึง ชั้น ${input.totalFloors}, ชั้นละ 3 ห้อง คือ x01, x02, x03)`,
-    `บทบาทลับของมึง: "${roleDef.nameTh}" (${roleDef.nameEn}) | ห้องประจำตัวถาวร: ห้อง ${input.myRoom} (ชั้น ${input.myFloor}, แถวแนวตั้ง ${input.myColumn})`,
+    `=== ตัวตนและแฟ้มความลับของมึง ===`,
+    `ชื่อ: "${input.bot.name}" | เพศ: ${genderLabel} | คาแรคเตอร์: ${input.bot.archetype}`,
+    `นิสัย: ${input.bot.persona}`,
+    `สไตล์การพูด: ${input.bot.speechStyle}`,
+    `บทบาทลับ: "${roleDef.nameTh}" (${roleDef.nameEn}) | ความสามารถ: ${roleDef.shortAbilityTh}`,
+    `ห้องประจำตัวถาวร: ห้อง ${input.myRoom} (ชั้น ${input.myFloor}, แถวแนวตั้ง ${input.myColumn})`,
     roleMission,
-    `สถานะวันและกติกาโหวตวันนี้ (วันที่ ${input.day}/${input.maxDays}): ${voteUnlockNote}`,
-    `ชั้นที่ปิดตายไปแล้ว: ${input.lockedFloors.length > 0 ? input.lockedFloors.join(', ') : 'ยังไม่มี'} | แถวที่ปิดตายไปแล้ว: ${input.lockedColumns.length > 0 ? input.lockedColumns.join(', ') : 'ยังไม่มี'}`,
-    input.morningHeadline ? `ข่าวเมื่อเช้า: ${input.morningHeadline}` : '',
-    `ห้องที่เปิด/ปิดตายแล้ว: ${revealedSummary || 'ไม่มี'}`,
-    `ผู้รอดชีวิต: ${aliveNames}`,
-    clueStrings.length > 0 ? `สมุดบันทึกเบาะแสสกิลของมึง:\n${clueStrings.join('\n')}` : 'เบาะแสสกิล: ยังไม่มี',
-    chatHistory ? `ประวัติแชทล่าสุด:\n${chatHistory}` : 'ประวัติแชทล่าสุด: (ยังไม่มีใครพูด)',
-    input.triggerReason === 'HUMAN_REPLY' && input.lastHumanMessage
-      ? `เพื่อนชื่อ "${input.lastHumanMessage.senderName}" เพิ่งพิมพ์ว่า: "${input.lastHumanMessage.text}" — จงคิดวิเคราะห์เองและโต้ตอบกลับให้ตรงกับสถานการณ์และบุคลิก "${input.bot.archetype}" ของมึง!`
-      : input.triggerReason === 'PRE_READY'
-        ? `มึงกำลังจะกดพร้อมโหวต จงสรุปความเห็นหรือทิ้งท้ายตามบุคลิก "${input.bot.archetype}" ของมึง 1 ประโยค`
-        : `จงเปิดประเด็นวิเคราะห์/ซักถาม/ปั่นแชทอย่างอิสระจากข้อมูลตรงหน้าตามบุคลิก "${input.bot.archetype}" ของมึง`,
-    `ตอบกลับมาแค่ข้อความแชท 1-2 ประโยคสั้นๆ เท่านั้น (ห้ามซ้ำประโยคเดิมในแชท):`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+    clueStrings.length > 0
+      ? `สมุดบันทึกเบาะแสกลางคืนส่วนตัวของมึง (มีแค่มึงที่รู้):\n${clueStrings.join('\n')}`
+      : 'สมุดบันทึกเบาะแสกลางคืนส่วนตัว: ยังไม่มี (เพิ่งเริ่มวันแรก หรือยังไม่พบเบาะแส)',
+    sharedContext,
+    `=== คำสั่ง ===\n${taskDirective}\nตอบกลับมาเป็นข้อความแชทสดๆ 1-3 ประโยคสั้นๆ เท่านั้น (ห้ามซ้ำประโยคที่มีในแชทอยู่แล้ว):`,
+  ].join('\n\n');
 
   try {
     const { text, provider } = await generateWithMultiProvider(
@@ -633,28 +722,250 @@ export async function generateBotChat(
       false
     );
     const cleaned = sanitizeThaiColloquial(text);
-    if (!cleaned) return { text: buildEmergencyOfflineChat(input), provider: 'fallback' };
+    if (!cleaned) return null;
     return { text: cleaned, provider };
-  } catch {
-    return { text: buildEmergencyOfflineChat(input), provider: 'fallback' };
+  } catch (err) {
+    console.warn(`[AI] generateBotChat failed for ${input.bot.name}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+export interface MultiBotParticipant {
+  bot: BotProfile;
+  role: RoleId;
+  myRoom: HotelRoomNumber;
+  myFloor: HotelFloorNumber;
+  myColumn: HotelColumnNumber;
+  evilPartners: Array<{ name: string; role: RoleId; room?: HotelRoomNumber | null }>;
+  privateClues: PrivateClueLog[];
+}
+
+export interface MultiBotExchangeInput {
+  speakers: MultiBotParticipant[];
+  totalFloors: number;
+  phase: GamePhase;
+  day: number;
+  maxDays: number;
+  revealedRooms: RevealedRoomInfo[];
+  lockedFloors: HotelFloorNumber[];
+  lockedColumns: HotelColumnNumber[];
+  players: FogBotContextPlayer[];
+  pastVoteRecords: PastVoteRecord[];
+  recentChat: ChatMessage[];
+  morningHeadline: string | null;
+  triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'BOT_BANTER';
+  lastHumanMessage?: { senderName: string; text: string };
+}
+
+/**
+ * Multi-Bot Conversational Flow via Structured JSON Output:
+ * Generates a realistic 2-3 message back-and-forth exchange in ONE LLM call so bots
+ * directly react to the human player AND bounce replies off each other without rate-limit spikes!
+ * Strictly enforces per-bot Fog of War (each bot ONLY knows its own dossier + public chat).
+ */
+export async function generateMultiBotExchange(
+  input: MultiBotExchangeInput
+): Promise<Array<{ botId: string; text: string; provider: ProviderChoice }>> {
+  if (input.speakers.length === 0) return [];
+  if (input.speakers.length === 1) {
+    const s = input.speakers[0];
+    const single = await generateBotChat({
+      bot: s.bot,
+      role: s.role,
+      myRoom: s.myRoom,
+      myFloor: s.myFloor,
+      myColumn: s.myColumn,
+      totalFloors: input.totalFloors,
+      phase: input.phase,
+      day: input.day,
+      maxDays: input.maxDays,
+      revealedRooms: input.revealedRooms,
+      lockedFloors: input.lockedFloors,
+      lockedColumns: input.lockedColumns,
+      players: input.players,
+      pastVoteRecords: input.pastVoteRecords,
+      recentChat: input.recentChat,
+      morningHeadline: input.morningHeadline,
+      evilPartners: s.evilPartners,
+      privateClues: s.privateClues,
+      triggerReason: input.triggerReason,
+      lastHumanMessage: input.lastHumanMessage,
+    });
+    return single ? [{ botId: s.bot.id, text: single.text, provider: single.provider }] : [];
+  }
+
+  const sharedContext = formatGameStateContext({
+    day: input.day,
+    maxDays: input.maxDays,
+    phase: input.phase,
+    totalFloors: input.totalFloors,
+    players: input.players,
+    revealedRooms: input.revealedRooms,
+    lockedFloors: input.lockedFloors,
+    lockedColumns: input.lockedColumns,
+    morningHeadline: input.morningHeadline,
+    pastVoteRecords: input.pastVoteRecords,
+    recentChat: input.recentChat,
+  });
+
+  const dossiers = input.speakers
+    .map((s, idx) => {
+      const roleDef = ROLE_DEFINITIONS[s.role];
+      const clues =
+        s.privateClues.length > 0
+          ? s.privateClues
+              .slice(-6)
+              .map((c) => `[คืน ${c.night}] ${c.detail}`)
+              .join(' | ')
+          : 'ยังไม่มีเบาะแสกลางคืน';
+      const strategy = buildRoleStrategyBrief({
+        role: s.role,
+        myRoom: s.myRoom,
+        myFloor: s.myFloor,
+        myColumn: s.myColumn,
+        evilPartners: s.evilPartners,
+      });
+      return `--- ลำดับพูดที่ ${idx + 1}: botId="${s.bot.id}" | ชื่อ="${s.bot.name}" | เพศ=${s.bot.gender === 'M' ? 'ชาย' : 'หญิง'} | คาแรคเตอร์=${s.bot.archetype} ---
+นิสัย: ${s.bot.persona}
+สไตล์การพูด: ${s.bot.speechStyle}
+บทบาทลับ: ${roleDef.nameTh} (${roleDef.nameEn}) | ห้องประจำตัว: ห้อง ${s.myRoom} (ชั้น ${s.myFloor}, แถว ${s.myColumn})
+${strategy}
+เบาะแสส่วนตัวของ ${s.bot.name} เท่านั้น: ${clues}`;
+    })
+    .join('\n\n');
+
+  const scenarioDirective =
+    input.triggerReason === 'HUMAN_REPLY' && input.lastHumanMessage
+      ? `ผู้เล่นชื่อ "${input.lastHumanMessage.senderName}" เพิ่งพิมพ์ว่า: "${input.lastHumanMessage.text}"
+สร้างบทสนทนาโต้ตอบต่อเนื่องกันตามลำดับพูดข้างต้น:
+- คนที่ 1 ตอบโต้ "${input.lastHumanMessage.senderName}" โดยตรง (ถ้าโดนจี้ชื่อ/ชั้น/ห้องให้แก้ตัวหรือเถียงกลับ)
+- คนที่ 2 (และ 3 ถ้ามี) โต้ตอบต่อจากทั้ง "${input.lastHumanMessage.senderName}" และคำพูดของบอทคนก่อนหน้าให้เหมือนเพื่อนในวงเหล้าคุยโต้เถียงกันสดๆ!`
+      : input.triggerReason === 'BOT_BANTER'
+        ? `สร้างบทสนทนาโต้เถียง/ต่อบทกันเองระหว่างบอท ${input.speakers.length} ตัว โดยต่อยอดจากประวัติแชทล่าสุดและประวัติโหวตที่ผ่านมา ให้คนหลังโต้แย้ง/แซะ/ซักถามคนก่อนหน้าอย่างเป็นธรรมชาติ!`
+        : `เพิ่งเริ่มช่วงสนทนาวันที่ ${input.day}! สร้างบทสนทนาเปิดวงของบอท ${input.speakers.length} ตัว โดยคนที่ 1 เปิดประเด็นจากข่าวเมื่อเช้า/เบาะแส/ห้องศพตั้งต้น และคนถัดไปโต้ตอบเถียงกันหรือแชร์มุมมองต่อจากคนแรกทันที!`;
+
+  const userPrompt = [
+    sharedContext,
+    `=== แฟ้มลับเฉพาะตัวของบอทที่จะพูดรอบนี้ (กฎเหล็ก Fog of War: บอทแต่ละตัวรู้เฉพาะแฟ้มของตัวเองเท่านั้น ห้ามเอาความลับของบอทอีกตัวมาพูดเด็ดขาด!) ===\n\n${dossiers}`,
+    `=== ภารกิจ ===\n${scenarioDirective}
+
+ตอบกลับเป็น JSON Object ตามโครงสร้างนี้เท่านั้น (ห้ามมีข้อความอื่นนอก JSON):
+{
+  "messages": [
+    { "botId": "${input.speakers[0].bot.id}", "text": "ข้อความแชทสั้นๆ 1-3 ประโยค ภาษาเพื่อนซี้กู-มึง" }
+  ]
+}`,
+  ].join('\n\n');
+
+  try {
+    const { text, provider } = await generateWithMultiProvider(
+      input.speakers[0].bot.preferredProvider,
+      CORE_PERSONA_INSTRUCTION +
+        '\nสำคัญมาก: รักษากฎ Fog of War แยกสมองบอทแต่ละตัวออกจากกัน ห้ามให้บอทตัวหนึ่งรู้บทบาทหรือห้องของบอทอีกตัว (ยกเว้นคู่หูฝ่ายฆาตกร) และตอบกลับเป็น JSON เท่านั้น!',
+      userPrompt,
+      true,
+      1100
+    );
+
+    const parsed = extractJsonObject(text);
+    const rawList = Array.isArray(parsed?.messages)
+      ? (parsed.messages as Array<{ botId?: string; text?: string }>)
+      : [];
+
+    const validIds = new Set(input.speakers.map((s) => s.bot.id));
+    const seen = new Set<string>();
+    const results: Array<{ botId: string; text: string; provider: ProviderChoice }> = [];
+
+    for (const item of rawList) {
+      const id = typeof item?.botId === 'string' ? item.botId.trim() : '';
+      if (!validIds.has(id) || seen.has(id)) continue;
+      const cleaned = typeof item?.text === 'string' ? sanitizeThaiColloquial(item.text) : '';
+      if (!cleaned) continue;
+      seen.add(id);
+      results.push({ botId: id, text: cleaned, provider });
+    }
+
+    return results;
+  } catch (err) {
+    console.warn(
+      '[AI] generateMultiBotExchange failed:',
+      err instanceof Error ? err.message : err
+    );
+    return [];
+  }
+}
+
+/**
+ * Dynamic Secret Underground Night Chat Reply between Evil Bot and Human Evil Partner
+ * (100% live LLM, zero hardcoded dialogue).
+ */
+export async function generateBotSecretReply(params: {
+  bot: BotProfile;
+  role: 'MURDERER' | 'ACCOMPLICE';
+  myRoom: HotelRoomNumber;
+  partnerName: string;
+  partnerMessage: string;
+  day: number;
+  totalFloors: number;
+  unrevealedRooms: HotelRoomNumber[];
+  secretChat: SecretChatMessage[];
+  privateClues: PrivateClueLog[];
+}): Promise<string | null> {
+  const roleLabel = params.role === 'MURDERER' ? 'ฆาตกร' : 'ผู้ช่วยฆาตกร';
+  const secretHistory = params.secretChat
+    .slice(-8)
+    .map((m) => `${m.senderName}: ${m.text}`)
+    .join('\n');
+  const clues = params.privateClues
+    .slice(-5)
+    .map((c) => `[คืน ${c.night}] ${c.detail}`)
+    .join(' | ');
+
+  const prompt = `มึงคือ ${params.bot.name} (${params.bot.archetype}, บทบาท: ${roleLabel}, ห้องพักมึง: ${params.myRoom}) กำลังกระซิบแชทลับกลางคืนกับคู่หู "${params.partnerName}" ในคืนที่ ${params.day} (โรงแรมมี ${params.totalFloors} ชั้น)
+ห้องที่ยังเปิดอยู่ตอนนี้: [${params.unrevealedRooms.join(', ')}]
+เบาะแสสืบชั้นของมึง: ${clues || 'ยังไม่มี'}
+ประวัติแชทลับคืนนี้:
+${secretHistory}
+
+"${params.partnerName}" เพิ่งกระซิบว่า: "${params.partnerMessage}"
+ตอบกลับคู่หูในแชทลับสั้นๆ 1-2 ประโยค ภาษาเพื่อนซี้กู-มึง วางแผนเชือดหรือชี้เป้าให้เนียนที่สุด:`;
+
+  try {
+    const { text } = await generateWithMultiProvider(
+      params.bot.preferredProvider,
+      CORE_PERSONA_INSTRUCTION,
+      prompt,
+      false
+    );
+    const cleaned = sanitizeThaiColloquial(text);
+    return cleaned || null;
+  } catch (err) {
+    console.warn('[AI] generateBotSecretReply failed:', err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
 /**
  * AI Accomplice sends Secret Underground Whisper & Target Room/Floor Ping to Murderer at Night.
+ * Whisper text is 100% live LLM generated (returns whisper: null if LLM fails — ZERO hardcoded phrases).
  */
 export async function generateAccompliceSecretPing(params: {
   bot: BotProfile;
   murdererName: string;
+  murdererRoom: HotelRoomNumber | null;
   day: number;
+  totalFloors: number;
   unrevealedRooms: HotelRoomNumber[];
   myRoom: HotelRoomNumber;
+  players: FogBotContextPlayer[];
+  pastVoteRecords: PastVoteRecord[];
   recentChat: ChatMessage[];
   privateClues: PrivateClueLog[];
-}): Promise<{ whisper: string; pingRoom: HotelRoomNumber; pingFloor?: HotelFloorNumber }> {
-  const candidates = params.unrevealedRooms.filter((r) => r !== params.myRoom);
+}): Promise<{ whisper: string | null; pingRoom: HotelRoomNumber; pingFloor?: HotelFloorNumber }> {
+  const candidates = params.unrevealedRooms.filter(
+    (r) => r !== params.myRoom && r !== params.murdererRoom
+  );
 
-  // If Accomplice just found a player's floor in privateClues, prefer an unrevealed room on that floor!
   const latestClue = params.privateClues[params.privateClues.length - 1];
   const floorMatch = latestClue?.detail.match(/ชั้น\s*([1-7])/);
   const clueFloor = floorMatch ? (Number(floorMatch[1]) as HotelFloorNumber) : null;
@@ -662,56 +973,58 @@ export async function generateAccompliceSecretPing(params: {
     ? candidates.filter((r) => getFloorOfRoom(r) === clueFloor)
     : [];
 
-  const pickRoom =
+  const mechanicalPickRoom =
     (clueFloorRooms.length > 0
       ? clueFloorRooms[Math.floor(Math.random() * clueFloorRooms.length)]
       : candidates[Math.floor(Math.random() * Math.max(1, candidates.length))]) ??
     params.unrevealedRooms[0] ??
     201;
 
-  const fallback = () => ({
-    whisper: clueFloor
-      ? `เฮ้ยไอ้${params.murdererName} กูเพิ่งสืบเจอเหยื่ออยู่ชั้น ${clueFloor}! ลองเล็งห้อง ${pickRoom} ดู หรือมึงจะไปเชือดห้องอื่นชั้นไหนก็จัดเลย!`
-      : `เฮ้ยไอ้${params.murdererName} ลองเชือดห้อง ${pickRoom} ดูดิ หรือมึงอยากไปเก็บห้องอื่นก็ตามใจมึงเลย!`,
-    pingRoom: pickRoom,
-    pingFloor: clueFloor ?? undefined,
-  });
-
   try {
     const chatSnippet = params.recentChat
-      .slice(-10)
+      .slice(-12)
       .map((m) => (m.isSystem ? `[ระบบ] ${m.text}` : `${m.senderName}: ${m.text}`))
       .join('\n');
-    const cluesText = params.privateClues.map((c) => c.detail).join(' | ');
+    const cluesText = params.privateClues.map((c) => `[คืน ${c.night}] ${c.detail}`).join('\n');
 
-    const prompt = `มึงคือผู้ช่วยฆาตกร (${params.bot.name}) กำลังคุยแชทลับกลางคืนกับฆาตกร (${params.murdererName}) คืนที่ ${params.day}
-ห้องที่ยังไม่ถูกเปิด/ปิดตาย (เลือกชี้เป้าได้): [${candidates.join(', ')}]
-เบาะแสสืบชั้นที่มึงได้มา: ${cluesText || 'ยังไม่มี'}
+    const prompt = `มึงคือผู้ช่วยฆาตกรชื่อ "${params.bot.name}" (${params.bot.archetype}, นิสัย: ${params.bot.persona}, ห้องมึง: ${params.myRoom})
+กำลังกระซิบในแชทลับใต้ดินคืนที่ ${params.day} กับคู่หูฆาตกรชื่อ "${params.murdererName}" (ห้องฆาตกร: ${params.murdererRoom ?? 'ไม่ระบุ'})
+โรงแรมมี ${params.totalFloors} ชั้น | ห้องที่ยังไม่ถูกเปิด/ปิดตาย (เลือกชี้เป้าได้): [${candidates.join(', ')}]
+เบาะแสสืบชั้นที่มึงส่องมาได้:
+${cluesText || 'ยังไม่มี'}
 แชทสาธารณะล่าสุด:
 ${chatSnippet || '(ไม่มี)'}
 
-เลือกหมายเลขห้อง 1 ห้องที่ยังไม่เปิดเพื่อส่งซิกแนะนำให้ฆาตกร (บอกชั้นที่มึงสืบเจอด้วยถ้ามี!) และพิมพ์กระซิบสั้นๆ กู-มึง ตอบเป็น JSON เท่านั้น:
-{"room": ${pickRoom}, "whisper": "ข้อความกระซิบสั้นๆ ไม่เกิน 110 ตัวอักษร"}`;
+คิดวิเคราะห์จากเบาะแสและแชท แล้วเลือก 1 ห้องที่ยังไม่เปิดเพื่อส่งซิกแนะนำให้ฆาตกร พร้อมพิมพ์กระซิบสั้นๆ 1-2 ประโยค ภาษาเพื่อนซี้กู-มึง ตามนิสัยของมึง (ถ้าส่องเจอชั้นใครก็บอกชื่อและชั้นนั้นด้วย!)
+ตอบเป็น JSON เท่านั้น:
+{"room": ${mechanicalPickRoom}, "whisper": "ข้อความกระซิบสดๆ ไม่เกิน 140 ตัวอักษร"}`;
 
     const { text } = await generateWithMultiProvider(
       params.bot.preferredProvider,
       CORE_PERSONA_INSTRUCTION + '\nตอบกลับเป็น JSON เท่านั้น',
       prompt,
-      true
+      true,
+      360
     );
     const parsed = extractJsonObject(text);
-    if (!parsed) return fallback();
+    if (!parsed) {
+      return { whisper: null, pingRoom: mechanicalPickRoom, pingFloor: clueFloor ?? undefined };
+    }
 
     const rawRoom = Number(parsed.room) as HotelRoomNumber;
-    const validRoom = candidates.includes(rawRoom) ? rawRoom : pickRoom;
+    const validRoom = candidates.includes(rawRoom) ? rawRoom : mechanicalPickRoom;
     const whisper =
       typeof parsed.whisper === 'string' && parsed.whisper.trim()
         ? sanitizeThaiColloquial(parsed.whisper)
-        : fallback().whisper;
+        : null;
 
     return { whisper, pingRoom: validRoom, pingFloor: clueFloor ?? undefined };
-  } catch {
-    return fallback();
+  } catch (err) {
+    console.warn(
+      '[AI] generateAccompliceSecretPing failed:',
+      err instanceof Error ? err.message : err
+    );
+    return { whisper: null, pingRoom: mechanicalPickRoom, pingFloor: clueFloor ?? undefined };
   }
 }
 
@@ -723,6 +1036,7 @@ export async function decideBotNightAction(params: {
   totalFloors: number;
   unrevealedRooms: HotelRoomNumber[];
   players: FogBotContextPlayer[];
+  pastVoteRecords: PastVoteRecord[];
   evilPartnerIds: string[];
   alreadyCheckedIds: string[];
   lastKeymasterLockedRoom: HotelRoomNumber | null;
@@ -734,7 +1048,8 @@ export async function decideBotNightAction(params: {
   const alivePlayers = params.players.filter((p) => p.alive);
   const activeFloors = getFloorsForCount(params.totalFloors);
 
-  const fallbackDecision = ():
+  // Pure mechanical legal-move safeguard ONLY if LLM call errors or outputs an illegal target
+  const legalMoveSafeguard = ():
     | HotelRoomNumber
     | HotelFloorNumber
     | HotelColumnNumber
@@ -742,16 +1057,12 @@ export async function decideBotNightAction(params: {
     | null => {
     if (params.role === 'MURDERER') {
       const pool = params.unrevealedRooms.filter((r) => r !== params.myRoom);
-      if (
-        params.secretPing?.room &&
-        pool.includes(params.secretPing.room) &&
-        Math.random() < 0.65
-      ) {
+      if (params.secretPing?.room && pool.includes(params.secretPing.room) && Math.random() < 0.7) {
         return params.secretPing.room;
       }
       if (params.secretPing?.floor) {
         const floorPool = pool.filter((r) => getFloorOfRoom(r) === params.secretPing?.floor);
-        if (floorPool.length > 0 && Math.random() < 0.65) {
+        if (floorPool.length > 0 && Math.random() < 0.7) {
           return floorPool[Math.floor(Math.random() * floorPool.length)];
         }
       }
@@ -760,7 +1071,7 @@ export async function decideBotNightAction(params: {
 
     if (params.role === 'KEYMASTER') {
       const pool = params.unrevealedRooms.filter((r) => r !== params.lastKeymasterLockedRoom);
-      if (pool.includes(params.myRoom) && Math.random() < 0.32) return params.myRoom;
+      if (pool.includes(params.myRoom) && Math.random() < 0.3) return params.myRoom;
       return pool[Math.floor(Math.random() * Math.max(1, pool.length))] ?? params.unrevealedRooms[0] ?? 101;
     }
 
@@ -804,101 +1115,124 @@ export async function decideBotNightAction(params: {
   if (params.role === 'DRUNK') return null;
 
   try {
-    const aliveSummary = alivePlayers.map((p) => `- id:${p.id} ชื่อ:${p.name}`).join('\n');
+    const aliveSummary = alivePlayers.map((p) => `- id:"${p.id}" ชื่อ:"${p.name}"`).join('\n');
+    const deadSummary = params.players
+      .filter((p) => !p.alive)
+      .map(
+        (p) =>
+          `${p.name} (ห้อง ${p.deathRoom ?? '?'}, ${p.deathCause === 'MURDERED' ? 'ถูกฆ่า' : 'ถูกโหวตออก'})`
+      )
+      .join(', ');
     const chatSnippet = params.recentChat
-      .slice(-10)
+      .slice(-15)
       .map((m) => (m.isSystem ? `[ระบบ] ${m.text}` : `${m.senderName}: ${m.text}`))
       .join('\n');
-    const cluesText = params.privateClues.map((c) => c.detail).join(' | ');
+    const cluesText = params.privateClues.map((c) => `[คืน ${c.night}] ${c.detail}`).join('\n');
+    const voteText = params.pastVoteRecords
+      .map((v) => `วัน ${v.day}: ${v.winnerLabel} (${v.votes.map((x) => `${x.voterName}->${x.targetLabel}`).join(', ')})`)
+      .join('\n');
 
     let prompt = '';
+    const baseHeader = `มึงคือ "${params.bot.name}" (${params.bot.archetype}, นิสัย: ${params.bot.persona})
+คืนที่ ${params.day} | ห้องพักมึง: ${params.myRoom} (ชั้น ${getFloorOfRoom(params.myRoom)}, แถว ${getColumnOfRoom(params.myRoom)}) | โรงแรมมี ${params.totalFloors} ชั้น
+ผู้เสียชีวิตแล้ว: ${deadSummary || 'ยังไม่มี'}
+ประวัติโหวตที่ผ่านมา: ${voteText || 'ยังไม่มี'}
+สมุดเบาะแสส่วนตัวของมึง:
+${cluesText || 'ยังไม่มี'}
+แชทล่าสุด (15 ข้อความ):
+${chatSnippet || '(ไม่มี)'}`;
+
     if (params.role === 'MURDERER') {
       const secretSnippet = params.secretChat
-        .slice(-4)
+        .slice(-6)
         .map((m) => `${m.senderName}: ${m.text}`)
         .join('\n');
       const pingHint = params.secretPing?.room
         ? `ผู้ช่วยส่งซิกแนะนำ: ห้อง ${params.secretPing.room}`
         : params.secretPing?.floor
           ? `ผู้ช่วยส่งซิกแนะนำ: ชั้น ${params.secretPing.floor}`
-          : 'ไม่มีซิก';
-      prompt = `คุณคือฆาตกร (${params.bot.name}) คืนที่ ${params.day} ห้องของคุณคือ ${params.myRoom} (ห้ามจิ้มห้องตัวเอง!)
-โรงแรมรอบนี้มี ${params.totalFloors} ชั้น คุณมีอิสระเลือกฆ่าได้ทุกห้องที่ยังเปิดอยู่: [${params.unrevealedRooms.filter((r) => r !== params.myRoom).join(', ')}]
-${pingHint} (จะเชื่อหรือไม่เชื่อผู้ช่วยก็ได้)
+          : 'ยังไม่มีซิก';
+      prompt = `${baseHeader}
+บทบาท: ฆาตกร — เลือกห้องสังหารได้อิสระจากห้องที่ยังไม่เปิด (ห้ามเลือกห้องตัวเอง ${params.myRoom}): [${params.unrevealedRooms.filter((r) => r !== params.myRoom).join(', ')}]
+ซิกจากผู้ช่วย: ${pingHint} (วิเคราะห์เองว่าจะเชื่อหรือไม่เชื่อ)
 แชทลับผู้ช่วย: ${secretSnippet || '(ไม่มี)'}
-แชทล่าสุด: ${chatSnippet || '(ไม่มี)'}
-เลือกหมายเลขห้องเป้าหมาย 1 ห้องเพื่อลอบสังหาร ตอบเป็น JSON เท่านั้น: {"room": 302}`;
+วิเคราะห์เหตุผลเชิงกลยุทธ์แล้วเลือก 1 ห้อง ตอบเป็น JSON เท่านั้น: {"reasoning": "เหตุผลสั้นๆ", "room": 302}`;
     } else if (params.role === 'KEYMASTER') {
       const validRooms = params.unrevealedRooms.filter((r) => r !== params.lastKeymasterLockedRoom);
-      prompt = `คุณคือช่างกุญแจ (${params.bot.name}) คืนที่ ${params.day} ห้องของคุณคือ ${params.myRoom}
-ห้ามล็อกห้อง ${params.lastKeymasterLockedRoom ?? 'ไม่มี'} ซ้ำ!
-ห้องที่เลือกได้: [${validRooms.join(', ')}]
-แชทล่าสุด: ${chatSnippet || '(ไม่มี)'}
-เลือก 1 ห้องเพื่อล็อกป้องกันการฆ่า ตอบเป็น JSON เท่านั้น: {"room": 302}`;
+      prompt = `${baseHeader}
+บทบาท: ช่างกุญแจ — ห้ามล็อกห้อง ${params.lastKeymasterLockedRoom ?? 'ไม่มี'} ซ้ำ!
+ห้องที่เลือกล็อกป้องกันได้: [${validRooms.join(', ')}]
+วิเคราะห์จากแชทว่าห้องไหนเสี่ยงโดนฆาตกรบุกมากสุด (หรือป้องกันห้องตัวเอง ${params.myRoom}) ตอบเป็น JSON เท่านั้น: {"reasoning": "เหตุผลสั้นๆ", "room": 302}`;
     } else if (params.role === 'HOUSEKEEPER') {
-      prompt = `คุณคือแม่บ้าน (${params.bot.name}) คืนที่ ${params.day} เบาะแสเก่า: ${cluesText || 'ไม่มี'}
-แชทล่าสุด: ${chatSnippet || '(ไม่มี)'}
-เลือกตรวจสอบ 1 ชั้นแนวนอน (1 ถึง ${params.totalFloors}) เพื่อรู้จำนวนคนรอดในชั้นนั้น ตอบเป็น JSON เท่านั้น: {"floor": 2}`;
+      prompt = `${baseHeader}
+บทบาท: แม่บ้าน — เลือกตรวจ 1 ชั้นแนวนอน (1 ถึง ${params.totalFloors}) เพื่อรู้จำนวนคนรอดชีวิตในชั้นนั้น (เลือกชั้นที่ยังไม่มีข้อมูลหรือกำลังเป็นที่ถกเถียงในแชท!)
+ตอบเป็น JSON เท่านั้น: {"reasoning": "เหตุผลสั้นๆ", "floor": 2}`;
     } else if (params.role === 'WITNESS') {
-      prompt = `คุณคือพยาน (${params.bot.name}) คืนที่ ${params.day} เบาะแสเก่า: ${cluesText || 'ไม่มี'}
-แชทล่าสุด: ${chatSnippet || '(ไม่มี)'}
-เลือกเฝ้าดู 1 ชั้น (1 ถึง ${params.totalFloors}) ที่คาดว่าฆาตกรจะมาฆ่าคนคืนนี้ ตอบเป็น JSON เท่านั้น: {"floor": 2}`;
+      prompt = `${baseHeader}
+บทบาท: พยาน — เลือกเฝ้าดู 1 ชั้น (1 ถึง ${params.totalFloors}) ที่คาดว่าฆาตกรจะมาลงมือฆ่าคนคืนนี้ (หากเดาถูกชั้นจะรู้ทิศทางชั้นฆาตกรทันที!)
+ตอบเป็น JSON เท่านั้น: {"reasoning": "เหตุผลสั้นๆ", "floor": 2}`;
     } else if (params.role === 'GLAZIER') {
-      prompt = `คุณคือช่างเช็ดกระจก (${params.bot.name}) คืนที่ ${params.day} เบาะแสเก่า: ${cluesText || 'ไม่มี'}
-เลือกตรวจสอบ 1 แถวแนวตั้ง (1 = ห้องลงท้าย 01, 2 = ลงท้าย 02, 3 = ลงท้าย 03) ตลอด ${params.totalFloors} ชั้น เพื่อรู้จำนวนคนรอดทั้งแถว ตอบเป็น JSON เท่านั้น: {"column": 2}`;
+      prompt = `${baseHeader}
+บทบาท: ช่างเช็ดกระจก — เลือกตรวจ 1 แถวแนวตั้ง (1 = x01, 2 = x02, 3 = x03) ตลอด ${params.totalFloors} ชั้น เพื่อรู้จำนวนคนรอดทั้งแถว
+ตอบเป็น JSON เท่านั้น: {"reasoning": "เหตุผลสั้นๆ", "column": 2}`;
     } else if (params.role === 'DETECTIVE' || params.role === 'ACCOMPLICE') {
-      prompt = `คุณคือ ${ROLE_DEFINITIONS[params.role].nameTh} (${params.bot.name}) คืนที่ ${params.day}
-คนที่เคยตรวจแล้ว: [${params.alreadyCheckedIds.join(', ')}]
-ผู้รอดชีวิต (ห้ามเลือกตัวเอง id:${params.bot.id}):
+      prompt = `${baseHeader}
+บทบาท: ${ROLE_DEFINITIONS[params.role].nameTh} — เลือกชื่อผู้เล่น 1 คนเพื่อสืบว่าพักอยู่ชั้นไหน (1 ถึง ${params.totalFloors})
+คนที่เคยสืบแล้ว: [${params.alreadyCheckedIds.join(', ') || 'ยังไม่มี'}]
+ผู้รอดชีวิตที่เลือกได้ (ห้ามเลือกตัวเอง id:"${params.bot.id}"${params.role === 'ACCOMPLICE' ? ' และห้ามเลือกฆาตกรคู่หู' : ''}):
 ${aliveSummary}
-เลือก id ของผู้เล่น 1 คนเพื่อตรวจว่าพักอยู่ชั้นไหน (1 ถึง ${params.totalFloors}) ตอบเป็น JSON เท่านั้น: {"targetId": "..."}`;
+วิเคราะห์ว่าควรสืบใครจากแชทล่าสุด ตอบเป็น JSON เท่านั้น: {"reasoning": "เหตุผลสั้นๆ", "targetId": "..."}`;
     }
 
     const { text } = await generateWithMultiProvider(
       params.bot.preferredProvider,
-      'คุณคือ AI นักวางแผนบอร์ดเกม HOTEL MURDER ตอบกลับเป็น JSON ที่ถูกต้องเท่านั้น',
+      'คุณคือ AI นักวางแผนบอร์ดเกม HOTEL MURDER คิดวิเคราะห์จากบริบททั้งหมดแล้วตอบกลับเป็น JSON ที่ถูกต้องเท่านั้น',
       prompt,
-      true
+      true,
+      360
     );
     const parsed = extractJsonObject(text);
-    if (!parsed) return fallbackDecision();
+    if (!parsed) return legalMoveSafeguard();
 
     if (params.role === 'DETECTIVE' || params.role === 'ACCOMPLICE') {
       const targetId = typeof parsed.targetId === 'string' ? parsed.targetId.trim() : '';
-      const valid = alivePlayers.some((p) => p.id === targetId && p.id !== params.bot.id);
-      return valid ? targetId : fallbackDecision();
+      const valid =
+        alivePlayers.some((p) => p.id === targetId && p.id !== params.bot.id) &&
+        !(params.role === 'ACCOMPLICE' && params.evilPartnerIds.includes(targetId));
+      return valid ? targetId : legalMoveSafeguard();
     }
     if (params.role === 'HOUSEKEEPER' || params.role === 'WITNESS') {
       const floorNum = Number(parsed.floor) as HotelFloorNumber;
-      return activeFloors.includes(floorNum) ? floorNum : fallbackDecision();
+      return activeFloors.includes(floorNum) ? floorNum : legalMoveSafeguard();
     }
     if (params.role === 'GLAZIER') {
       const colNum = Number(parsed.column) as HotelColumnNumber;
-      return HOTEL_COLUMNS.includes(colNum) ? colNum : fallbackDecision();
+      return HOTEL_COLUMNS.includes(colNum) ? colNum : legalMoveSafeguard();
     }
 
     const roomNum = Number(parsed.room) as HotelRoomNumber;
     if (params.unrevealedRooms.includes(roomNum)) {
       if (params.role === 'KEYMASTER' && roomNum === params.lastKeymasterLockedRoom) {
-        return fallbackDecision();
+        return legalMoveSafeguard();
       }
       if (params.role === 'MURDERER' && roomNum === params.myRoom) {
-        return fallbackDecision();
+        return legalMoveSafeguard();
       }
       return roomNum;
     }
-    return fallbackDecision();
-  } catch {
-    return fallbackDecision();
+    return legalMoveSafeguard();
+  } catch (err) {
+    console.warn(`[AI] decideBotNightAction failed for ${params.bot.name}:`, err instanceof Error ? err.message : err);
+    return legalMoveSafeguard();
   }
 }
 
 /**
- * 3-MODE DAY VOTE:
- * Bot chooses freely between:
- *  1. ROOM (open 1 unrevealed room)
- *  2. FLOOR (lock down 1 horizontal floor — eliminates everyone on that floor!)
- *  3. COLUMN (lock down 1 vertical column — eliminates everyone in that column!)
+ * PROGRESSIVE 3-MODE DAY VOTE:
+ * - Day 1: ROOM only
+ * - Day 2: ROOM + Horizontal FLOOR
+ * - Day 3-4: ROOM + Horizontal FLOOR + Vertical COLUMN
+ * Comment is 100% live LLM generated (never hardcoded!).
  */
 export async function decideBotDayVote(params: {
   bot: BotProfile;
@@ -906,10 +1240,16 @@ export async function decideBotDayVote(params: {
   myRoom: HotelRoomNumber;
   day: number;
   maxDays: number;
+  totalFloors: number;
   unrevealedRooms: HotelRoomNumber[];
   votableFloors: HotelFloorNumber[];
   votableColumns: HotelColumnNumber[];
   revealedRooms: RevealedRoomInfo[];
+  lockedFloors: HotelFloorNumber[];
+  lockedColumns: HotelColumnNumber[];
+  players: FogBotContextPlayer[];
+  pastVoteRecords: PastVoteRecord[];
+  evilPartners: Array<{ name: string; role: RoleId; room?: HotelRoomNumber | null }>;
   privateClues: PrivateClueLog[];
   recentChat: ChatMessage[];
   murdererRoomIfEvil?: HotelRoomNumber | null;
@@ -925,7 +1265,6 @@ export async function decideBotDayVote(params: {
 
   const isEvil = ROLE_DEFINITIONS[params.role].faction === 'EVIL';
 
-  // Safe pools (Good/Evil never self-destruct their own room/floor/column; Evil protects Murderer's room/floor/column!)
   const safeRooms = params.unrevealedRooms.filter((r) => {
     if (params.role === 'DRUNK') return true;
     if (r === params.myRoom) return false;
@@ -952,41 +1291,20 @@ export async function decideBotDayVote(params: {
     params.unrevealedRooms[0] ??
     101;
 
-  // Smart fallback choice honoring role strategy (including Floor / Column Lockdown!)
-  const makeFallbackChoice = (): DayVoteChoice => {
+  // Pure mechanical legal-vote safeguard if LLM errors (comment stays null!)
+  const legalVoteSafeguard = (): DayVoteChoice => {
     if (params.role === 'DRUNK') {
       const roll = Math.random();
-      if (roll < 0.35 && params.unrevealedRooms.includes(params.myRoom)) {
+      if (roll < 0.38 && params.unrevealedRooms.includes(params.myRoom)) {
         return { kind: 'ROOM', room: params.myRoom };
       }
-      if (roll < 0.6 && params.votableFloors.includes(myFloor)) {
+      if (roll < 0.65 && params.votableFloors.includes(myFloor)) {
         return { kind: 'FLOOR', floor: myFloor };
       }
-      if (roll < 0.78 && params.votableColumns.includes(myColumn)) {
+      if (roll < 0.85 && params.votableColumns.includes(myColumn)) {
         return { kind: 'COLUMN', column: myColumn };
       }
       return { kind: 'ROOM', room: fallbackRoom };
-    }
-
-    // Housekeeper / Glazier / Good bots sometimes push Floor/Column Lockdown when clues or urgency are high
-    const latestClue = params.privateClues[params.privateClues.length - 1];
-    if (!isEvil && latestClue) {
-      const fMatch = latestClue.detail.match(/ชั้น\s*([1-7])/);
-      const cMatch = latestClue.detail.match(/แถวที่\s*([1-3])/);
-      const countMatch = latestClue.detail.match(/(\d+)\s*คน/);
-      const count = countMatch ? Number(countMatch[1]) : 1;
-      if (fMatch && count >= 1) {
-        const f = Number(fMatch[1]) as HotelFloorNumber;
-        if (safeFloors.includes(f) && Math.random() < 0.65) {
-          return { kind: 'FLOOR', floor: f };
-        }
-      }
-      if (cMatch && count >= 2) {
-        const c = Number(cMatch[1]) as HotelColumnNumber;
-        if (safeCols.includes(c) && Math.random() < 0.55) {
-          return { kind: 'COLUMN', column: c };
-        }
-      }
     }
 
     const roll = Math.random();
@@ -1005,22 +1323,33 @@ export async function decideBotDayVote(params: {
     return { kind: 'ROOM', room: fallbackRoom };
   };
 
-  const fallbackChoice = makeFallbackChoice();
-
   try {
-    const chatSnippet = params.recentChat
-      .slice(-12)
-      .map((m) => (m.isSystem ? `[ระบบ] ${m.text}` : `${m.senderName}: ${m.text}`))
-      .join('\n');
-    const cluesText = params.privateClues.map((c) => c.detail).join(' | ');
-    const roleDef = ROLE_DEFINITIONS[params.role];
+    const sharedContext = formatGameStateContext({
+      day: params.day,
+      maxDays: params.maxDays,
+      phase: 'VOTE',
+      totalFloors: params.totalFloors,
+      players: params.players,
+      revealedRooms: params.revealedRooms,
+      lockedFloors: params.lockedFloors,
+      lockedColumns: params.lockedColumns,
+      morningHeadline: null,
+      pastVoteRecords: params.pastVoteRecords,
+      recentChat: params.recentChat,
+    });
 
-    const strategy =
-      params.role === 'DRUNK'
-        ? `มึงคือคนเมา! ห้องมึงคือ ${params.myRoom} (ชั้น ${myFloor}, แถว ${myColumn}) ถ้าโหวตเปิดห้อง ${params.myRoom} หรือปิดตายชั้น ${myFloor} / แถว ${myColumn} (โดยไม่มีฆาตกรโดน) มึงชนะเดี่ยวทันที!`
-        : isEvil
-          ? `มึงอยู่ฝ่ายฆาตกร! ห้ามโหวตโดนห้อง/ชั้น/แถวของฆาตกรเด็ดขาด (ห้องห้ามโดน: ${params.murdererRoomIfEvil ?? params.myRoom}, ชั้นห้ามปิด: ${murdererFloor ?? myFloor}, แถวห้ามปิด: ${murdererCol ?? myColumn}) ให้เลือกโหวตปิดชั้นอื่น แถวอื่น หรือเปิดห้องคนดีแทน!`
-          : `มึงอยู่ฝ่ายผู้บริสุทธิ์ (${roleDef.nameTh})! ห้องมึงอยู่ชั้น ${myFloor} แถว ${myColumn} (อย่าโหวตปิดชั้น/แถวตัวเอง!) หากเบาะแสชี้ชัดว่าชั้นไหนหรือแถวไหนน่าสงสัย/คนกระจุกตัว หรือเป็นวันท้ายๆ ให้โหวต "FLOOR" (ปิดตายทั้งชั้น) หรือ "COLUMN" (ปิดตายทั้งแถวแนวตั้ง) เพื่อกวาดล้างได้เลย หรือเลือก "ROOM" เพื่อเปิดรายห้อง`;
+    const cluesText = params.privateClues
+      .slice(-8)
+      .map((c) => `[คืน ${c.night} - ${c.title}] ${c.detail}`)
+      .join('\n');
+
+    const strategy = buildRoleStrategyBrief({
+      role: params.role,
+      myRoom: params.myRoom,
+      myFloor,
+      myColumn,
+      evilPartners: params.evilPartners,
+    });
 
     const canFloorLock = params.day >= 2 && safeFloors.length > 0;
     const canColLock = params.day >= 3 && safeCols.length > 0;
@@ -1032,35 +1361,35 @@ export async function decideBotDayVote(params: {
     if (canColLock) {
       optionsBlock += `\n- ปิดตาย 1 แถวแนวตั้ง ("kind":"COLUMN"): [${safeCols.join(', ')}]`;
     }
+    optionsBlock += `\n- งดออกเสียง ("kind":"SKIP", "target":0)`;
 
-    const dayRuleLine =
-      params.day <= 1
-        ? `วันที่ 1/${params.maxDays} (วันแรกโหวตได้เฉพาะ "เปิด 1 ห้อง" เท่านั้น! ปิดชั้นปลดวันที่ 2, ปิดแถวปลดวันที่ 3)`
-        : params.day === 2
-          ? `วันที่ 2/${params.maxDays} (ปลดล็อก "เปิด 1 ห้อง" และ "ปิดตาย 1 ชั้นแนวนอน" — ปิดแถวแนวตั้งยังไม่ปลด ต้องรอวันที่ 3!)`
-          : `วันที่ ${params.day}/${params.maxDays} (ปลดล็อกครบทั้ง 3 แบบ: เปิด 1 ห้อง / ปิดตายทั้งชั้นแนวนอน / ปิดตายทั้งแถวแนวตั้ง!)`;
-
-    const prompt = `ชื่อมึง: ${params.bot.name} (${params.bot.archetype}) | นิสัย: ${params.bot.persona}
-${dayRuleLine}
+    const prompt = `=== ตัวตนและแฟ้มความลับของมึง ===
+ชื่อ: "${params.bot.name}" | เพศ: ${params.bot.gender === 'M' ? 'ชาย' : 'หญิง'} | คาแรคเตอร์: ${params.bot.archetype}
+นิสัย: ${params.bot.persona}
+สไตล์การพูด: ${params.bot.speechStyle}
+บทบาทลับ: ${ROLE_DEFINITIONS[params.role].nameTh} | ห้องประจำตัว: ${params.myRoom} (ชั้น ${myFloor}, แถว ${myColumn})
 ${strategy}
-เบาะแสส่วนตัวของมึง: ${cluesText || 'ไม่มี'}
-ตัวเลือกที่โหวตได้ตอนนี้:
+สมุดเบาะแสส่วนตัวของมึง:
+${cluesText || 'ยังไม่มี'}
+
+${sharedContext}
+
+=== ตัวเลือกที่โหวตได้ตอนนี้ ===
 ${optionsBlock}
 
-แชทล่าสุด:
-${chatSnippet || '(ไม่มี)'}
-
-เลือกโหวต 1 รูปแบบจากตัวเลือกที่ปลดล็อกแล้วข้างต้น และพิมพ์คอมเมนต์สั้นๆ ตามนิสัยของมึง (สไตล์เพื่อนซี้กู-มึง ห้ามพูดครับ/ค่ะ) ตอบเป็น JSON เท่านั้น:
-ตัวอย่าง: {"kind": "${canFloorLock ? 'FLOOR' : 'ROOM'}", "target": ${canFloorLock ? safeFloors[0] : fallbackRoom}, "comment": "..."}`;
+วิเคราะห์จากแชทล่าสุด ประวัติโหวต และเบาะแสส่วนตัวของมึง แล้วตัดสินใจโหวต 1 เป้าหมาย พร้อมคอมเมนต์สั้นๆ 1-2 ประโยคภาษาเพื่อนซี้กู-มึง (ตามนิสัยของมึง อ้างอิงสิ่งที่เพิ่งคุยกันในแชท!)
+ตอบเป็น JSON เท่านั้น:
+{"reasoning": "เหตุผลในใจสั้นๆ", "kind": "${canFloorLock ? 'FLOOR' : 'ROOM'}", "target": ${canFloorLock ? safeFloors[0] : fallbackRoom}, "comment": "ข้อความแชทสั้นๆ ตอนลงคะแนน"}`;
 
     const { text } = await generateWithMultiProvider(
       params.bot.preferredProvider,
       CORE_PERSONA_INSTRUCTION + '\nตอบกลับเป็น JSON เท่านั้น',
       prompt,
-      true
+      true,
+      480
     );
     const parsed = extractJsonObject(text);
-    if (!parsed) return { choice: fallbackChoice, comment: null };
+    if (!parsed) return { choice: legalVoteSafeguard(), comment: null };
 
     const kind = String(parsed.kind ?? '').toUpperCase();
     const targetNum = Number(parsed.target);
@@ -1069,6 +1398,9 @@ ${chatSnippet || '(ไม่มี)'}
         ? sanitizeThaiColloquial(parsed.comment)
         : null;
 
+    if (kind === 'SKIP') {
+      return { choice: { kind: 'SKIP' }, comment };
+    }
     if (kind === 'FLOOR' && params.day >= 2) {
       const f = targetNum as HotelFloorNumber;
       if (safeFloors.includes(f)) {
@@ -1087,12 +1419,18 @@ ${chatSnippet || '(ไม่มี)'}
       }
     }
 
-    return { choice: fallbackChoice, comment };
-  } catch {
-    return { choice: fallbackChoice, comment: null };
+    return { choice: legalVoteSafeguard(), comment };
+  } catch (err) {
+    console.warn(`[AI] decideBotDayVote failed for ${params.bot.name}:`, err instanceof Error ? err.message : err);
+    return { choice: legalVoteSafeguard(), comment: null };
   }
 }
 
+/**
+ * 100% Live LLM Post-Game Reactions (ZERO hardcoded fallback templates).
+ * Uses rich match context (true roles, rooms, clues, vote history, chat highlights, bot archetypes)
+ * and retries missing bots individually if needed.
+ */
 export async function generatePostGameThoughts(params: {
   winner: Faction;
   winnerPlayerName: string | null;
@@ -1104,68 +1442,50 @@ export async function generatePostGameThoughts(params: {
     role: RoleId;
     room: HotelRoomNumber | null;
     alive: boolean;
+    gender?: 'M' | 'F';
+    archetype?: string;
     persona?: string;
+    speechStyle?: string;
     deathCause: string | null;
+    clueLogs?: PrivateClueLog[];
   }>;
+  pastVoteRecords: PastVoteRecord[];
   historyLog: string[];
   recentChat: ChatMessage[];
 }): Promise<BotPostGameThought[]> {
   const bots = params.players.filter((p) => p.isBot);
   if (bots.length === 0) return [];
 
-  const murderer = params.players.find((p) => p.role === 'MURDERER');
-  const murdererName = murderer?.name ?? 'ไอ้ฆาตกร';
-  const murdererRoom = murderer?.room ?? '?';
-
-  const makeFallbackThoughts = (): BotPostGameThought[] =>
-    bots.map((b) => {
-      const botFaction = ROLE_DEFINITIONS[b.role].faction;
-      const botWon = botFaction === params.winner;
-      let thought = '';
-
-      if (params.winner === 'SPECIAL') {
-        thought =
-          b.role === 'DRUNK'
-            ? `ฮ่าๆๆๆ แดกเหล้าฟรีทั้งคืน! พวกมึงโง่โหวตโดนห้อง ${b.room} ของกูเฉย กูชนะเดี่ยวโว้ย!`
-            : `ไอ้เหี้ยเอ๊ย โดนไอ้คนเมาปั่นหัวทั้งวง! ปิดตายเข้าทางมันซะงั้น หัวร้อนชิบหาย!`;
-      } else if (b.role === 'MURDERER') {
-        thought = botWon
-          ? `ฮ่าๆๆ โง่ทั้งโรงแรมเลยว่ะ! กูซ่อนอยู่ห้อง ${b.room} นิ่งๆ พวกมึงปิดชั้นปิดแถวกันมั่วเอง สมน้ำหน้า!`
-          : `ไอ้สัส เกือบเนียนแล้วเชียว พวกมึงเสือกปิดตายโดนห้อง ${b.room} กูจนได้ รอบหน้าเอาคืนแน่!`;
-      } else if (b.role === 'ACCOMPLICE') {
-        thought = botWon
-          ? `บอกแล้วทีมกูโคตรตึง! กูปั่นเบี่ยงชั้นจนพวกมึงโหวตปิดตายคนดีกันเองยับ!`
-          : `ไอ้เหี้ยเอ๊ย กูอุตส่าห์ปั่นเบี่ยงประเด็นแทบตาย ยังโดนปิดตายห้องฆาตกรได้อีก เสียดายสัส!`;
-      } else if (botWon) {
-        thought = `สะใจสัส! กูว่าแล้วไอ้${murdererName} แม่งซ่อนอยู่ห้อง ${murdererRoom} อย่ามาคิดว่าจะหนีพ้นนะมึง!`;
-      } else {
-        thought = `ไอ้เหี้ยเอ๊ย โหวตปิดชั้นปิดห้องกันโง่ชิบหาย! ไอ้${murdererName} แม่งนอนห้อง ${murdererRoom} ชิลๆ จนชนะเลย!`;
-      }
-
-      return {
-        botId: b.id,
-        botName: b.name,
-        role: b.role,
-        alive: b.alive,
-        thought,
-        provider: 'fallback',
-      };
-    });
-
   const rosterSummary = params.players
     .map(
       (p) =>
-        `- id:${p.id} ชื่อ:${p.name} (${p.isBot ? 'AI' : 'คนจริง'}) ห้อง:${p.room ?? '?'} บทบาท:${ROLE_DEFINITIONS[p.role].nameTh} [${ROLE_DEFINITIONS[p.role].faction}] สถานะ:${p.alive ? 'รอดชีวิต' : p.deathCause === 'MURDERED' ? 'ถูกฆ่า' : 'ถูกโหวตออก/ปิดตาย'}`
+        `- id:"${p.id}" ชื่อ:"${p.name}" (${p.isBot ? 'AI' : 'คนจริง'}) ห้อง:${p.room ?? '?'} บทบาท:${ROLE_DEFINITIONS[p.role].nameTh} [${ROLE_DEFINITIONS[p.role].faction}] สถานะ:${p.alive ? 'รอดชีวิต' : p.deathCause === 'MURDERED' ? 'ถูกฆ่ากลางคืน' : 'ถูกโหวต/ปิดตายตอนกลางวัน'}`
     )
     .join('\n');
 
-  const botIdsSummary = bots
-    .map((b) => `- id:${b.id} ชื่อ:${b.name} นิสัย:${b.persona ?? 'เพื่อนซี้ปากร้าย'}`)
+  const botProfilesSummary = bots
+    .map((b) => {
+      const clues =
+        b.clueLogs && b.clueLogs.length > 0
+          ? b.clueLogs.map((c) => `คืน${c.night}:${c.title}`).join('; ')
+          : 'ไม่มี';
+      return `- botId:"${b.id}" | ชื่อ:"${b.name}" (${b.gender === 'F' ? 'หญิง' : 'ชาย'}, ${b.archetype ?? 'เพื่อนซี้'}) | นิสัย:${b.persona ?? 'ปากร้าย'} | สไตล์:${b.speechStyle ?? 'กู-มึง'} | บทบาทจริง:${ROLE_DEFINITIONS[b.role].nameTh} ห้อง ${b.room ?? '?'} | เบาะแสที่เคยได้:${clues}`;
+    })
     .join('\n');
+
+  const voteHistorySummary =
+    params.pastVoteRecords.length > 0
+      ? params.pastVoteRecords
+          .map(
+            (r) =>
+              `วันที่ ${r.day} (${r.winnerLabel}): ${r.votes.map((v) => `${v.voterName}->${v.targetLabel}`).join(', ')}`
+          )
+          .join('\n')
+      : '(ไม่มีประวัติโหวต)';
 
   const chatHighlights = params.recentChat
     .filter((m) => !m.isSystem)
-    .slice(-16)
+    .slice(-18)
     .map((m) => `${m.senderName}: ${m.text}`)
     .join('\n');
 
@@ -1176,20 +1496,24 @@ export async function generatePostGameThoughts(params: {
         ? 'ฝ่ายฆาตกรชนะ!'
         : `ฝ่ายพิเศษ คนเมา (${params.winnerPlayerName ?? 'คนเมา'}) ชนะเดี่ยว!`;
 
-  const prompt = `เกม "HOTEL MURDER ปริศนาโรงแรมมรณะ" (ระบบโหวต 3 รูปแบบ: เปิดห้อง / ปิดตายทั้งชั้น / ปิดตายทั้งแถวแนวตั้ง) จบลงแล้ว!
-ผลแพ้ชนะ: ${winnerText} (${params.winReason})
+  const prompt = `เกม "HOTEL MURDER ปริศนาโรงแรมมรณะ" จบลงแล้ว และเพิ่งเฉลยบทบาทกับห้องพักของทุกคน!
+ผลแพ้ชนะ: ${winnerText}
+สาเหตุการจบเกม: ${params.winReason}
 
-เปิดเผยบทบาทและห้องพักทุกคน:
+เฉลยบทบาทและห้องพักทุกคน:
 ${rosterSummary}
 
-สรุปเหตุการณ์ตลอดเกม:
+ประวัติการโหวตแต่ละวัน:
+${voteHistorySummary}
+
+เหตุการณ์สำคัญตลอดเกม:
 ${params.historyLog.slice(-28).join('\n')}
 
 ไฮไลท์แชทในเกม:
 ${chatHighlights || '(ไม่มีแชท)'}
 
-จงสร้างข้อความ "ความคิดในใจหลังรู้ความจริง" สำหรับบอท AI ทุกตัวด้านล่างนี้ (คนละ 1-2 ประโยคสั้นๆ แซ่บๆ แบบเพื่อนซี้วงเหล้าปากร้าย กู-มึง ด่าเพื่อนที่ปิดชั้นมั่ว/โดนคนเมาหลอก ชมหรือหมั่นไส้คนที่ปั่นเนียน หรือขิงใส่คนที่แพ้ ห้ามมีคำว่า ครับ/ค่ะ เด็ดขาด!):
-${botIdsSummary}
+จงสร้าง "ปฏิกิริยาหลังรู้ความจริง" สดๆ ให้ครบทุก botId ด้านล่างนี้ (คนละ 1-3 ประโยคสั้นๆ แซ่บๆ แบบเพื่อนซี้วงเหล้า กู-มึง ตรงตามเพศและนิสัยของแต่ละตัว โดยอ้างอิงเหตุการณ์จริง ชื่อคนจริง หมายเลขห้อง หรือการโหวตที่เพิ่งเกิดขึ้นในเกมนี้ ห้ามซ้ำกัน ห้ามมีคำว่า ครับ/ค่ะ เด็ดขาด!):
+${botProfilesSummary}
 
 ตอบกลับเป็น JSON Object รูปแบบนี้เท่านั้น:
 {
@@ -1201,9 +1525,10 @@ ${botIdsSummary}
   try {
     const { text, provider } = await generateWithMultiProvider(
       'groq',
-      CORE_PERSONA_INSTRUCTION + '\nตอบกลับเป็น JSON เท่านั้น ครบทุก botId ที่กำหนด',
+      CORE_PERSONA_INSTRUCTION + '\nตอบกลับเป็น JSON เท่านั้น ต้องมีครบทุก botId ที่ระบุ',
       prompt,
-      true
+      true,
+      1400
     );
 
     const parsed = extractJsonObject(text);
@@ -1211,23 +1536,64 @@ ${botIdsSummary}
       ? (parsed.reactions as Array<{ botId?: string; thought?: string }>)
       : [];
 
-    const fallbackList = makeFallbackThoughts();
-    return bots.map((b, idx) => {
-      const match = rawList.find((r) => r.botId === b.id);
-      const rawThought =
-        typeof match?.thought === 'string' ? sanitizeThaiColloquial(match.thought) : '';
-      if (!rawThought) return fallbackList[idx];
-      return {
-        botId: b.id,
-        botName: b.name,
-        role: b.role,
-        alive: b.alive,
-        thought: rawThought,
-        provider,
-      };
-    });
-  } catch {
-    return makeFallbackThoughts();
+    const thoughtsById = new Map<string, { thought: string; provider: ProviderChoice }>();
+    for (const item of rawList) {
+      const id = typeof item?.botId === 'string' ? item.botId.trim() : '';
+      const cleaned = typeof item?.thought === 'string' ? sanitizeThaiColloquial(item.thought) : '';
+      if (id && cleaned) {
+        thoughtsById.set(id, { thought: cleaned, provider });
+      }
+    }
+
+    // If any bot was omitted in the first JSON batch, make one quick follow-up LLM call for just the missing bots
+    const missingBots = bots.filter((b) => !thoughtsById.has(b.id));
+    if (missingBots.length > 0 && missingBots.length < bots.length) {
+      try {
+        const retryPrompt = `เกมจบแล้ว (${winnerText} — ${params.winReason})
+เฉลยทุกคน:\n${rosterSummary}
+สร้างปฏิกิริยาหลังเกมแบบเพื่อนซี้กู-มึง 1-2 ประโยคให้เฉพาะบอทที่ยังขาดอยู่ด้านล่าง ตอบเป็น JSON เท่านั้น:
+${missingBots.map((b) => `- botId:"${b.id}" ชื่อ:"${b.name}" (${b.archetype ?? ''}) บทบาท:${ROLE_DEFINITIONS[b.role].nameTh} ห้อง:${b.room ?? '?'}`).join('\n')}
+{"reactions":[{"botId":"...","thought":"..."}]}`;
+        const retryRes = await generateWithMultiProvider(
+          provider === 'groq' ? 'gemini' : 'groq',
+          CORE_PERSONA_INSTRUCTION + '\nตอบกลับเป็น JSON เท่านั้น',
+          retryPrompt,
+          true,
+          700
+        );
+        const retryParsed = extractJsonObject(retryRes.text);
+        const retryList = Array.isArray(retryParsed?.reactions)
+          ? (retryParsed.reactions as Array<{ botId?: string; thought?: string }>)
+          : [];
+        for (const item of retryList) {
+          const id = typeof item?.botId === 'string' ? item.botId.trim() : '';
+          const cleaned =
+            typeof item?.thought === 'string' ? sanitizeThaiColloquial(item.thought) : '';
+          if (id && cleaned && !thoughtsById.has(id)) {
+            thoughtsById.set(id, { thought: cleaned, provider: retryRes.provider });
+          }
+        }
+      } catch {
+        // Skip silently if secondary retry fails; never inject hardcoded canned text!
+      }
+    }
+
+    return bots
+      .filter((b) => thoughtsById.has(b.id))
+      .map((b) => {
+        const entry = thoughtsById.get(b.id)!;
+        return {
+          botId: b.id,
+          botName: b.name,
+          role: b.role,
+          alive: b.alive,
+          thought: entry.thought,
+          provider: entry.provider,
+        };
+      });
+  } catch (err) {
+    console.warn('[AI] generatePostGameThoughts failed:', err instanceof Error ? err.message : err);
+    return [];
   }
 }
 

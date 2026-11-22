@@ -356,7 +356,7 @@ export interface BotPostGameThought {
   role: RoleId;
   alive: boolean;
   thought: string;
-  provider?: 'groq' | 'gemini' | 'fallback';
+  provider?: 'groq' | 'gemini';
 }
 
 export type NightStage = 'ACTION' | 'REVIEW';

@@ -98,7 +98,9 @@ export function GameOverScreen({ roomState, myPlayerId, onPlayAgain }: GameOverS
               </div>
             ) : roomState.aiThoughts.length === 0 ? (
               <p className="py-8 text-center text-sm text-[#9D948A]">
-                รอบนี้ไม่มีบอท AI ร่วมเล่น
+                {roomState.players.some((p) => p.isBot)
+                  ? 'ไม่สามารถโหลดความคิดสดจาก AI ได้ในขณะนี้ (กรุณาตรวจสอบ API Key ของ Groq หรือ Gemini)'
+                  : 'รอบนี้ไม่มีบอท AI ร่วมเล่น'}
               </p>
             ) : (
               <div className="space-y-3">

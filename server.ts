@@ -43,13 +43,20 @@ import {
   ROLE_DEFINITIONS,
   serializeDayVote,
 } from './src/shared/gameTypes.ts';
-import type { BotProfile, FogBotContextPlayer } from './server/aiProvider.ts';
+import type {
+  BotProfile,
+  FogBotContextPlayer,
+  MultiBotParticipant,
+  PastVoteRecord,
+} from './server/aiProvider.ts';
 import {
   createRoundBotProfiles,
   decideBotDayVote,
   decideBotNightAction,
   generateAccompliceSecretPing,
   generateBotChat,
+  generateBotSecretReply,
+  generateMultiBotExchange,
   generatePostGameThoughts,
 } from './server/aiProvider.ts';
 
@@ -136,6 +143,7 @@ interface GameRoom {
   secretChat: SecretChatMessage[];
   secretPing: SecretTargetPing | null;
   historyLog: string[];
+  pastVoteRecords: PastVoteRecord[];
   morningReport: MorningReport | null;
   voteResolution: VoteResolution | null;
   winner: Faction | null;
@@ -147,7 +155,9 @@ interface GameRoom {
   night: NightSubmissions;
   timers: Set<ReturnType<typeof setTimeout>>;
   lastHumanReplyAt: number;
+  lastChatAt: number;
   botChatterCountThisPhase: number;
+  conversationGenerationId: number;
   createdAt: number;
 }
 
@@ -265,7 +275,39 @@ function toFogBotContextPlayers(room: GameRoom): FogBotContextPlayer[] {
     name: p.name,
     alive: p.alive,
     isBot: p.isBot,
+    deathCause: p.deathCause,
+    deathDay: p.deathDay,
+    deathRoom: p.deathRoom,
   }));
+}
+
+function getEvilPartnersForBot(
+  room: GameRoom,
+  bot: ServerPlayer
+): Array<{ name: string; role: RoleId; room?: HotelRoomNumber | null }> {
+  if (!bot.role || ROLE_DEFINITIONS[bot.role].faction !== 'EVIL') return [];
+  return Array.from(room.players.values())
+    .filter(
+      (p) => p.id !== bot.id && p.role !== null && ROLE_DEFINITIONS[p.role].faction === 'EVIL'
+    )
+    .map((p) => ({
+      name: p.name,
+      role: p.role as RoleId,
+      room: p.room,
+    }));
+}
+
+function buildMultiBotParticipant(room: GameRoom, bot: ServerPlayer): MultiBotParticipant | null {
+  if (!bot.alive || !bot.botProfile || !bot.role || !bot.room) return null;
+  return {
+    bot: bot.botProfile,
+    role: bot.role,
+    myRoom: bot.room,
+    myFloor: getFloorOfRoom(bot.room),
+    myColumn: getColumnOfRoom(bot.room),
+    evilPartners: getEvilPartnersForBot(room, bot),
+    privateClues: bot.clueLogs,
+  };
 }
 
 /**
@@ -465,6 +507,7 @@ async function startServer() {
       timestamp: Date.now(),
     };
     room.chat.push(entry);
+    room.lastChatAt = entry.timestamp;
     if (room.chat.length > 150) {
       room.chat = room.chat.slice(-120);
     }
@@ -578,8 +621,12 @@ async function startServer() {
       role: p.role ?? 'KEYMASTER',
       room: p.room,
       alive: p.alive,
+      gender: p.botProfile?.gender,
+      archetype: p.botProfile?.archetype,
       persona: p.botProfile?.persona,
+      speechStyle: p.botProfile?.speechStyle,
       deathCause: p.deathCause,
+      clueLogs: [...p.clueLogs],
     }));
 
     void generatePostGameThoughts({
@@ -587,6 +634,7 @@ async function startServer() {
       winnerPlayerName,
       winReason: reason,
       players: snapshotPlayers,
+      pastVoteRecords: [...room.pastVoteRecords],
       historyLog: [...room.historyLog],
       recentChat: [...room.chat],
     }).then((thoughts) => {
@@ -600,24 +648,14 @@ async function startServer() {
   async function triggerSingleBotChat(
     room: GameRoom,
     bot: ServerPlayer,
-    triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'PRE_READY',
+    triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'PRE_READY' | 'BOT_BANTER',
     lastHumanMessage?: { senderName: string; text: string }
   ): Promise<void> {
     if (!rooms.has(room.roomCode)) return;
     if (!bot.alive || !bot.botProfile || !bot.role || !bot.room) return;
     if (room.phase !== 'DAY' && room.phase !== 'VOTE') return;
 
-    const evilPartners =
-      ROLE_DEFINITIONS[bot.role].faction === 'EVIL'
-        ? Array.from(room.players.values())
-            .filter(
-              (p) =>
-                p.id !== bot.id && p.role !== null && ROLE_DEFINITIONS[p.role].faction === 'EVIL'
-            )
-            .map((p) => p.name)
-        : [];
-
-    const { text } = await generateBotChat({
+    const result = await generateBotChat({
       bot: bot.botProfile,
       role: bot.role,
       myRoom: bot.room,
@@ -636,14 +674,16 @@ async function startServer() {
       lockedFloors: Array.from(room.lockedFloors),
       lockedColumns: Array.from(room.lockedColumns),
       players: toFogBotContextPlayers(room),
-      recentChat: room.chat.slice(-14),
+      pastVoteRecords: room.pastVoteRecords,
+      recentChat: room.chat.slice(-15),
       morningHeadline: room.morningReport?.headline ?? null,
-      evilPartners,
+      evilPartners: getEvilPartnersForBot(room, bot),
       privateClues: bot.clueLogs,
       triggerReason,
       lastHumanMessage,
     });
 
+    if (!result) return;
     if (!rooms.has(room.roomCode)) return;
     if (!bot.alive || (room.phase !== 'DAY' && room.phase !== 'VOTE')) return;
 
@@ -652,8 +692,79 @@ async function startServer() {
       senderName: bot.name,
       isSystem: false,
       isBot: true,
-      text,
+      text: result.text,
       kind: 'CHAT',
+    });
+  }
+
+  /**
+   * Structured Multi-Bot Exchange: generates 2-3 cohesive, context-aware replies in ONE LLM call
+   * so bots react to the human player AND bounce off each other naturally with staggered typing delays.
+   */
+  async function triggerMultiBotExchange(
+    room: GameRoom,
+    selectedBots: ServerPlayer[],
+    triggerReason: 'PHASE_START' | 'HUMAN_REPLY' | 'BOT_BANTER',
+    lastHumanMessage?: { senderName: string; text: string }
+  ): Promise<void> {
+    if (!rooms.has(room.roomCode)) return;
+    if (room.phase !== 'DAY' && room.phase !== 'VOTE') return;
+
+    const participants = selectedBots
+      .map((b) => buildMultiBotParticipant(room, b))
+      .filter((p): p is MultiBotParticipant => p !== null);
+
+    if (participants.length === 0) return;
+
+    const expectedGen = room.conversationGenerationId;
+    const expectedPhase = room.phase;
+
+    const messages = await generateMultiBotExchange({
+      speakers: participants,
+      totalFloors: room.totalFloors,
+      phase: room.phase,
+      day: room.day,
+      maxDays: room.maxDays,
+      revealedRooms: Array.from(room.revealedRooms.values()).map((r) => ({
+        room: r.room,
+        kind: r.kind,
+        day: r.day,
+        occupantName: r.occupantName,
+      })),
+      lockedFloors: Array.from(room.lockedFloors),
+      lockedColumns: Array.from(room.lockedColumns),
+      players: toFogBotContextPlayers(room),
+      pastVoteRecords: room.pastVoteRecords,
+      recentChat: room.chat.slice(-15),
+      morningHeadline: room.morningReport?.headline ?? null,
+      triggerReason,
+      lastHumanMessage,
+    });
+
+    if (!rooms.has(room.roomCode) || room.phase !== expectedPhase) return;
+    if (messages.length === 0) return;
+
+    messages.forEach((turn, idx) => {
+      const delay = idx === 0 ? 450 : idx * 2400 + Math.floor(Math.random() * 900);
+      scheduleRoomTimer(
+        room,
+        () => {
+          if (!rooms.has(room.roomCode) || room.phase !== expectedPhase) return;
+          // If a human sent a fresh message mid-sequence, drop stale trailing bot turns
+          if (idx > 0 && room.conversationGenerationId !== expectedGen) return;
+          const speaker = room.players.get(turn.botId);
+          if (!speaker || !speaker.alive) return;
+          pushChat(room, {
+            senderId: speaker.id,
+            senderName: speaker.name,
+            isSystem: false,
+            isBot: true,
+            text: turn.text,
+            kind: 'CHAT',
+          });
+        },
+        delay
+      );
     });
   }
 
@@ -697,6 +808,7 @@ async function startServer() {
     room.voteResolution = null;
     room.secretPing = null;
     room.botChatterCountThisPhase = 0;
+    room.conversationGenerationId += 1;
 
     for (const p of room.players.values()) {
       p.readyToVote = false;
@@ -732,27 +844,55 @@ async function startServer() {
 
     const aliveBots = shuffle(getAlivePlayers(room).filter((p) => p.isBot));
 
-    // Initial wave of 3 bot deductions/bluffs
-    const openingSpeakers = aliveBots.slice(0, Math.min(3, aliveBots.length));
-    openingSpeakers.forEach((bot, idx) => {
+    // Prioritize bots who received fresh clues last night to lead the opening multi-bot debate!
+    const botsWithFreshClues = aliveBots.filter((b) =>
+      b.clueLogs.some((c) => c.night === room.day - 1)
+    );
+    const otherBots = aliveBots.filter((b) => !botsWithFreshClues.includes(b));
+    const orderedOpeners = [...botsWithFreshClues, ...otherBots].slice(
+      0,
+      Math.min(3, aliveBots.length)
+    );
+
+    // Initial wave: cohesive 3-bot multi-turn conversation bouncing off each other
+    if (orderedOpeners.length > 0) {
       scheduleRoomTimer(
         room,
         () => {
           if (room.phase !== 'DAY') return;
-          void triggerSingleBotChat(room, bot, 'PHASE_START');
+          void triggerMultiBotExchange(room, orderedOpeners, 'PHASE_START');
         },
-        1700 + idx * 3200 + Math.floor(Math.random() * 1200)
+        1300
       );
-    });
+    }
 
-    // Staggered bot Ready checks (13–25s)
+    // Autonomous mid-day bot-to-bot banter if discussion hasn't jumped straight into voting
+    if (aliveBots.length >= 2) {
+      scheduleRoomTimer(
+        room,
+        () => {
+          if (room.phase !== 'DAY') return;
+          if (room.botChatterCountThisPhase >= 12) return;
+          // Only trigger banter if no human spoke in the last 5 seconds
+          if (Date.now() - room.lastHumanReplyAt < 5000) return;
+          const banterPair = shuffle(getAlivePlayers(room).filter((p) => p.isBot)).slice(0, 2);
+          if (banterPair.length > 0) {
+            room.botChatterCountThisPhase += banterPair.length;
+            void triggerMultiBotExchange(room, banterPair, 'BOT_BANTER');
+          }
+        },
+        11500
+      );
+    }
+
+    // Staggered bot Ready checks (15–28s) preserving 100% mutual Ready system
     aliveBots.forEach((bot, idx) => {
-      const readyDelay = 13500 + idx * 2100 + Math.floor(Math.random() * 2000);
+      const readyDelay = 15500 + idx * 2100 + Math.floor(Math.random() * 2000);
       scheduleRoomTimer(
         room,
         () => {
           if (room.phase !== 'DAY' || !bot.alive || bot.readyToVote) return;
-          if (idx === aliveBots.length - 1 || Math.random() < 0.25) {
+          if (idx === aliveBots.length - 1) {
             void triggerSingleBotChat(room, bot, 'PRE_READY');
           }
           bot.readyToVote = true;
@@ -843,12 +983,23 @@ async function startServer() {
       myRoom: bot.room,
       day: room.day,
       maxDays: room.maxDays,
+      totalFloors: room.totalFloors,
       unrevealedRooms,
       votableFloors: getVotableFloors(room),
       votableColumns: getVotableColumns(room),
-      revealedRooms: Array.from(room.revealedRooms.values()),
+      revealedRooms: Array.from(room.revealedRooms.values()).map((r) => ({
+        room: r.room,
+        kind: r.kind,
+        day: r.day,
+        occupantName: r.occupantName,
+      })),
+      lockedFloors: Array.from(room.lockedFloors),
+      lockedColumns: Array.from(room.lockedColumns),
+      players: toFogBotContextPlayers(room),
+      pastVoteRecords: room.pastVoteRecords,
+      evilPartners: getEvilPartnersForBot(room, bot),
       privateClues: bot.clueLogs,
-      recentChat: room.chat.slice(-12),
+      recentChat: room.chat.slice(-15),
       murdererRoomIfEvil: isEvil ? murderer?.room ?? null : null,
     });
 
@@ -1074,6 +1225,25 @@ async function startServer() {
       summaryText,
     };
 
+    room.pastVoteRecords.push({
+      day: room.day,
+      winnerLabel:
+        winnerKind === 'ROOM' && lynchedRoom
+          ? `เปิดห้อง ${lynchedRoom}`
+          : winnerKind === 'FLOOR' && lockedFloor
+            ? `ปิดตายชั้น ${lockedFloor}`
+            : winnerKind === 'COLUMN' && lockedColumn
+              ? `ปิดตายแถว ${lockedColumn}`
+              : isTie
+                ? 'คะแนนเสมอ'
+                : 'งดออกเสียง (Skip)',
+      summaryText,
+      votes: alive.map((p) => ({
+        voterName: p.name,
+        targetLabel: p.dayVote ? formatDayVoteLabel(serializeDayVote(p.dayVote)) : 'งดออกเสียง (Skip)',
+      })),
+    });
+
     room.historyLog.push(`ผลโหวตวันที่ ${room.day}: ${summaryText}`);
     pushChat(room, {
       senderId: 'SYSTEM',
@@ -1274,10 +1444,11 @@ async function startServer() {
               totalFloors: room.totalFloors,
               unrevealedRooms: getUnrevealedRooms(room),
               players: toFogBotContextPlayers(room),
+              pastVoteRecords: room.pastVoteRecords,
               evilPartnerIds,
               alreadyCheckedIds: bot.checkedPlayerIds,
               lastKeymasterLockedRoom: room.lastKeymasterLockedRoom,
-              recentChat: room.chat.slice(-10),
+              recentChat: room.chat.slice(-15),
               secretChat: ROLE_DEFINITIONS[bot.role].faction === 'EVIL' ? room.secretChat : [],
               secretPing: ROLE_DEFINITIONS[bot.role].faction === 'EVIL' ? room.secretPing : null,
               privateClues: bot.clueLogs,
@@ -1316,14 +1487,20 @@ async function startServer() {
             const res = await generateAccompliceSecretPing({
               bot: aliveAccomplice.botProfile,
               murdererName: aliveMurderer.name,
+              murdererRoom: aliveMurderer.room,
               day: room.day,
+              totalFloors: room.totalFloors,
               unrevealedRooms: getUnrevealedRooms(room),
               myRoom: aliveAccomplice.room,
-              recentChat: room.chat.slice(-10),
+              players: toFogBotContextPlayers(room),
+              pastVoteRecords: room.pastVoteRecords,
+              recentChat: room.chat.slice(-15),
               privateClues: aliveAccomplice.clueLogs,
             });
             if (room.phase !== 'NIGHT' || !aliveAccomplice.alive) return;
-            pushSecretEvilChat(room, aliveAccomplice, res.whisper);
+            if (res.whisper) {
+              pushSecretEvilChat(room, aliveAccomplice, res.whisper);
+            }
             broadcastSecretPing(room, {
               senderName: aliveAccomplice.name,
               kind: res.pingFloor ? 'FLOOR' : 'ROOM',
@@ -1861,6 +2038,7 @@ async function startServer() {
     room.historyLog = [
       `เริ่มเกมใหม่ (${allPlayers.length} คน, โรงแรม ${room.totalFloors} ชั้น/${activeRooms.length} ห้อง, จำกัด ${room.maxDays} วัน) — เปิดห้องศพตั้งต้น 3 ห้อง: ${initialCrimeRooms.join(', ')}`,
     ];
+    room.pastVoteRecords = [];
     room.morningReport = null;
     room.voteResolution = null;
     room.winner = null;
@@ -1870,6 +2048,7 @@ async function startServer() {
     room.aiThoughtsLoading = false;
     room.lastKeymasterLockedRoom = null;
     room.night = freshNightSubmissions();
+    room.conversationGenerationId += 1;
 
     pushChat(room, {
       senderId: 'SYSTEM',
@@ -1898,6 +2077,7 @@ async function startServer() {
     room.secretChat = [];
     room.secretPing = null;
     room.historyLog = [];
+    room.pastVoteRecords = [];
     room.morningReport = null;
     room.voteResolution = null;
     room.winner = null;
@@ -1907,6 +2087,7 @@ async function startServer() {
     room.aiThoughtsLoading = false;
     room.lastKeymasterLockedRoom = null;
     room.night = freshNightSubmissions();
+    room.conversationGenerationId += 1;
 
     for (const [id, p] of room.players.entries()) {
       if (p.isBot || !p.connected) {
@@ -1990,6 +2171,7 @@ async function startServer() {
           secretChat: [],
           secretPing: null,
           historyLog: [],
+          pastVoteRecords: [],
           morningReport: null,
           voteResolution: null,
           winner: null,
@@ -2001,7 +2183,9 @@ async function startServer() {
           night: freshNightSubmissions(),
           timers: new Set(),
           lastHumanReplyAt: 0,
+          lastChatAt: 0,
           botChatterCountThisPhase: 0,
+          conversationGenerationId: 0,
           createdAt: Date.now(),
         };
 
@@ -2248,22 +2432,36 @@ async function startServer() {
       });
 
       const now = Date.now();
-      if (now - room.lastHumanReplyAt > 4200 && room.botChatterCountThisPhase < 10) {
+      room.conversationGenerationId += 1;
+      if (now - room.lastHumanReplyAt > 3000 && room.botChatterCountThisPhase < 16) {
         room.lastHumanReplyAt = now;
         const aliveBots = shuffle(getAlivePlayers(room).filter((p) => p.isBot));
-        const responderCount = Math.min(aliveBots.length, Math.random() < 0.45 ? 2 : 1);
-        for (let i = 0; i < responderCount; i++) {
-          const responder = aliveBots[i];
-          room.botChatterCountThisPhase += 1;
+        if (aliveBots.length > 0) {
+          // Prioritize bots explicitly mentioned by name, floor, or room in the human's message!
+          const lowerText = cleanText.toLowerCase();
+          const mentionedBots = aliveBots.filter((b) => {
+            if (lowerText.includes(b.name.toLowerCase())) return true;
+            if (b.room && lowerText.includes(String(b.room))) return true;
+            if (b.room) {
+              const f = getFloorOfRoom(b.room);
+              if (lowerText.includes(`ชั้น ${f}`) || lowerText.includes(`ชั้น${f}`)) return true;
+            }
+            return false;
+          });
+          const unmentionedBots = aliveBots.filter((b) => !mentionedBots.includes(b));
+          const responderCount = Math.min(aliveBots.length, aliveBots.length >= 2 && Math.random() < 0.7 ? 2 : 1);
+          const chosenResponders = [...mentionedBots, ...unmentionedBots].slice(0, responderCount);
+
+          room.botChatterCountThisPhase += chosenResponders.length;
           scheduleRoomTimer(
             room,
             () => {
-              void triggerSingleBotChat(room, responder, 'HUMAN_REPLY', {
+              void triggerMultiBotExchange(room, chosenResponders, 'HUMAN_REPLY', {
                 senderName: player.name,
                 text: cleanText,
               });
             },
-            1600 + i * 2400 + Math.floor(Math.random() * 1300)
+            1050 + Math.floor(Math.random() * 550)
           );
         }
       }
@@ -2282,6 +2480,46 @@ async function startServer() {
       const cleanText = String(payload?.text ?? '').trim().slice(0, 200);
       if (!cleanText) return;
       pushSecretEvilChat(room, player, cleanText);
+
+      // If the Evil partner is an alive AI bot, reply dynamically via live LLM!
+      const botPartner = getAlivePlayers(room).find(
+        (p) =>
+          p.id !== player.id &&
+          p.isBot &&
+          p.botProfile &&
+          p.room &&
+          (p.role === 'MURDERER' || p.role === 'ACCOMPLICE')
+      );
+      if (botPartner && botPartner.botProfile && botPartner.room && (botPartner.role === 'MURDERER' || botPartner.role === 'ACCOMPLICE')) {
+        const partnerRole = botPartner.role;
+        const partnerProfile = botPartner.botProfile;
+        const partnerRoom = botPartner.room;
+        scheduleRoomTimer(
+          room,
+          () => {
+            void (async () => {
+              if (!rooms.has(room.roomCode) || room.phase !== 'NIGHT' || !botPartner.alive) return;
+              const reply = await generateBotSecretReply({
+                bot: partnerProfile,
+                role: partnerRole,
+                myRoom: partnerRoom,
+                partnerName: player.name,
+                partnerMessage: cleanText,
+                day: room.day,
+                totalFloors: room.totalFloors,
+                unrevealedRooms: getUnrevealedRooms(room),
+                secretChat: room.secretChat,
+                privateClues: botPartner.clueLogs,
+              });
+              if (!reply || !rooms.has(room.roomCode) || room.phase !== 'NIGHT' || !botPartner.alive) {
+                return;
+              }
+              pushSecretEvilChat(room, botPartner, reply);
+            })();
+          },
+          1300 + Math.floor(Math.random() * 800)
+        );
+      }
     });
 
     // ACCOMPLICE SIGNAL / PING TARGET TO MURDERER (ROOM, FLOOR, OR PLAYER)
