@@ -120,9 +120,21 @@ export function RoleCardContent({
           <p className="text-xs font-semibold text-[#FCA5A5]">เพื่อนร่วมฝ่ายฆาตกรของคุณ</p>
           <div className="mt-1.5 space-y-1">
             {intel.evilPartners.map((partner) => (
-              <p key={partner.id} className="text-sm text-[#F5EFE6]">
-                {partner.name} · {ROLE_DEFINITIONS[partner.role].nameTh}
-              </p>
+              <div
+                key={partner.id}
+                className="flex flex-wrap items-center justify-between gap-2 text-sm text-[#F5EFE6]"
+              >
+                <span className="font-semibold">
+                  {partner.name} · {ROLE_DEFINITIONS[partner.role].nameTh}
+                </span>
+                {partner.room && (
+                  <span className="font-mono-tabular text-xs font-bold text-[#FCA5A5]">
+                    ห้อง {partner.room}
+                    {partner.floor ? ` (ชั้น ${partner.floor}` : ''}
+                    {partner.column ? ` · แถว ${partner.column})` : partner.floor ? ')' : ''}
+                  </span>
+                )}
+              </div>
             ))}
           </div>
         </div>

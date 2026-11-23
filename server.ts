@@ -411,6 +411,9 @@ function buildPrivateIntel(room: GameRoom, player: ServerPlayer): PrivatePlayerI
           id: other.id,
           name: other.name,
           role: other.role as RoleId,
+          room: other.room,
+          floor: other.room ? getFloorOfRoom(other.room) : null,
+          column: other.room ? getColumnOfRoom(other.room) : null,
         }))
     : [];
 
@@ -1414,17 +1417,19 @@ async function startServer() {
               !bot.room
             )
               return;
-            const evilPartnerIds =
+            const evilPartnersList =
               ROLE_DEFINITIONS[bot.role].faction === 'EVIL'
-                ? Array.from(room.players.values())
-                    .filter(
-                      (p) =>
-                        p.id !== bot.id &&
-                        p.role !== null &&
-                        ROLE_DEFINITIONS[p.role].faction === 'EVIL'
-                    )
-                    .map((p) => p.id)
+                ? Array.from(room.players.values()).filter(
+                    (p) =>
+                      p.id !== bot.id &&
+                      p.role !== null &&
+                      ROLE_DEFINITIONS[p.role].faction === 'EVIL'
+                  )
                 : [];
+            const evilPartnerIds = evilPartnersList.map((p) => p.id);
+            const evilPartnerRooms = evilPartnersList
+              .map((p) => p.room)
+              .filter((r): r is HotelRoomNumber => r !== null);
 
             const decision = await decideBotNightAction({
               bot: bot.botProfile,
@@ -1436,6 +1441,7 @@ async function startServer() {
               players: toFogBotContextPlayers(room),
               pastVoteRecords: room.pastVoteRecords,
               evilPartnerIds,
+              evilPartnerRooms,
               alreadyCheckedIds: bot.checkedPlayerIds,
               lastKeymasterLockedRoom: room.lastKeymasterLockedRoom,
               recentChat: room.chat.slice(-15),
@@ -2496,6 +2502,7 @@ async function startServer() {
                 role: partnerRole,
                 myRoom: partnerRoom,
                 partnerName: player.name,
+                partnerRoom: player.room,
                 partnerMessage: cleanText,
                 day: room.day,
                 totalFloors: room.totalFloors,

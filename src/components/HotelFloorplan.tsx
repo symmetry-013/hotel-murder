@@ -123,7 +123,7 @@ export function HotelFloorplan({
       return 'โหมดส่งซิกชี้เป้า: กดเลือกห้องที่ยังไม่เปิดบนแผนผังเพื่อส่งซิกให้ฆาตกร';
     }
     if (canMurdererPickRoom) {
-      return `ฆาตกร: มีอิสระเลือกฆ่าได้ทุกห้องที่ยังไม่ปิดทั่วทั้ง ${activeFloors.length} ชั้น (ห้ามเลือกห้องตัวเอง)`;
+      return `ฆาตกร: มีอิสระเลือกฆ่าได้ทุกห้องที่ยังไม่ปิดทั่วทั้ง ${activeFloors.length} ชั้น (ห้ามเลือกห้องตัวเอง · ห้องคู่หูแสดงกรอบแดง)`;
     }
     if (canKeymasterPickRoom) {
       return lastLockedRoom
@@ -148,8 +148,13 @@ export function HotelFloorplan({
     if (isNight && myRole === 'DRUNK') {
       return 'คนเมาไม่มีสกิลกลางคืน — พักผ่อนและรอปั่นแชทให้ทุกคนโหวตห้อง/ชั้น/แถวคุณพรุ่งนี้!';
     }
+    if (intel && intel.evilPartners.length > 0) {
+      return 'ห้ามย้ายห้องตลอดเกม — ห้องของคุณแสดงกรอบทอง · ห้องคู่หูฝ่ายฆาตกรแสดงกรอบแดง ส่วนห้องคนอื่นปิดบังเป็น ???';
+    }
     return 'ห้ามย้ายห้องตลอดเกม — ห้องของคุณแสดงกรอบทอง ส่วนห้องคนอื่นปิดบังเป็น ??? ทั้งหมด';
   })();
+
+  const evilPartnerRoomList = (intel?.evilPartners ?? []).filter((p) => p.room !== null);
 
   return (
     <section
@@ -165,11 +170,19 @@ export function HotelFloorplan({
           <p className="text-xs text-[#CFC8BF] mt-0.5">{actionGuide}</p>
         </div>
 
-        <div className="flex items-center gap-3 text-[11px] font-mono-tabular text-[#9D948A]">
+        <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono-tabular text-[#9D948A]">
           <span className="inline-flex items-center gap-1 text-[#E8C984]">
             <KeyRound className="h-3 w-3" />
             <span>ห้องคุณ: {myRoom ?? '—'}</span>
           </span>
+          {evilPartnerRoomList.map((partner) => (
+            <span key={partner.id} className="inline-flex items-center gap-1 text-[#FCA5A5]">
+              <Skull className="h-3 w-3 text-[#F87171]" />
+              <span>
+                ห้องคู่หู ({partner.name}): {partner.room}
+              </span>
+            </span>
+          ))}
           <span className="inline-flex items-center gap-1 text-[#9D948A]">
             <EyeOff className="h-3 w-3" />
             <span>
@@ -408,6 +421,9 @@ export function HotelFloorplan({
                   const colNum = (colIdx + 1) as HotelColumnNumber;
                   const revealed = revealedMap.get(roomNum) ?? null;
                   const isMyRoom = myRoom === roomNum;
+                  const evilPartnerInRoom = !revealed
+                    ? evilPartnerRoomList.find((p) => p.room === roomNum) ?? null
+                    : null;
                   const isSelectedNight =
                     isNight &&
                     (myRole === 'MURDERER' || myRole === 'KEYMASTER') &&
@@ -486,6 +502,10 @@ export function HotelFloorplan({
                     tileStyle =
                       'border-[#C8A25A] bg-[#241D13] text-[#F8E7C0]' +
                       (isDisabledTile ? ' cursor-default' : ' cursor-pointer hover:bg-[#2F2518]');
+                  } else if (evilPartnerInRoom) {
+                    tileStyle =
+                      'border-[#B91C1C]/85 bg-[#2A1118] text-[#FECACA]' +
+                      (isDisabledTile ? ' cursor-default' : ' cursor-pointer hover:bg-[#38141E]');
                   } else if (!isDisabledTile) {
                     tileStyle = isVote
                       ? 'border-[#3D262B] bg-[#1B1419] text-[#EAE4DC] hover:border-[#DC2626] hover:bg-[#2A1318] cursor-pointer'
@@ -563,7 +583,18 @@ export function HotelFloorplan({
                           !isSelectedNight &&
                           !isPinged &&
                           !isRepeatLockBanned &&
-                          !isMyRoom && (
+                          !isMyRoom &&
+                          evilPartnerInRoom && (
+                            <Skull className="h-3.5 w-3.5 text-[#F87171] shrink-0" />
+                          )}
+                        {!revealed &&
+                          !isMyVotedRoom &&
+                          !isInMyVotedArea &&
+                          !isSelectedNight &&
+                          !isPinged &&
+                          !isRepeatLockBanned &&
+                          !isMyRoom &&
+                          !evilPartnerInRoom && (
                             <DoorClosed className="h-3.5 w-3.5 text-[#585057] shrink-0" />
                           )}
                       </div>
@@ -590,11 +621,19 @@ export function HotelFloorplan({
                           <span className="font-semibold text-[#D6B16A]">ห้ามล็อกซ้ำ</span>
                         ) : isMyVotedRoom ? (
                           <span className="font-semibold text-[#FECACA]">
-                            {isMyRoom ? 'ห้องคุณ · โหวตนี้' : '✓ โหวตเปิดห้องนี้'}
+                            {isMyRoom
+                              ? 'ห้องคุณ · โหวตนี้'
+                              : evilPartnerInRoom
+                                ? `ห้องคู่หู · โหวตนี้`
+                                : '✓ โหวตเปิดห้องนี้'}
                           </span>
                         ) : isInMyVotedArea ? (
                           <span className="font-semibold text-[#FCA5A5]">
-                            {isMyRoom ? 'ห้องคุณ · ปิดตาย!' : 'อยู่ในแนวปิดตาย'}
+                            {isMyRoom
+                              ? 'ห้องคุณ · ปิดตาย!'
+                              : evilPartnerInRoom
+                                ? `ห้องคู่หู · ปิดตาย!`
+                                : 'อยู่ในแนวปิดตาย'}
                           </span>
                         ) : isSelectedNight ? (
                           <span className="font-semibold">
@@ -604,6 +643,10 @@ export function HotelFloorplan({
                           <span className="font-semibold text-[#FDE047]">ซิกชี้เป้า!</span>
                         ) : isMyRoom ? (
                           <span className="font-semibold text-[#F3DC9F]">ห้องของคุณ</span>
+                        ) : evilPartnerInRoom ? (
+                          <span className="font-semibold text-[#FCA5A5]">
+                            คู่หู: {evilPartnerInRoom.name}
+                          </span>
                         ) : (
                           <span className="font-mono-tabular text-[#746C66]">???</span>
                         )}
@@ -623,6 +666,12 @@ export function HotelFloorplan({
           <span className="h-2.5 w-2.5 rounded-sm border border-[#C8A25A] bg-[#241D13]" />
           <span>ห้องของคุณ</span>
         </span>
+        {evilPartnerRoomList.length > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-[#FCA5A5]">
+            <span className="h-2.5 w-2.5 rounded-sm border border-[#B91C1C] bg-[#2A1118]" />
+            <span>ห้องคู่หูฝ่ายฆาตกร</span>
+          </span>
+        )}
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm border border-[#991B1B] bg-[#2D1016]" />
           <span>เสียชีวิต (DEAD) / ปิดตาย (ไม่เปิดบทบาท)</span>

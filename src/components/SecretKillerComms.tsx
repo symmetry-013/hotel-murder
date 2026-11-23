@@ -40,7 +40,10 @@ export function SecretKillerComms({
   const isAccomplice = intel.role === 'ACCOMPLICE';
   const partnerDesc =
     intel.evilPartners
-      .map((p) => `${p.name} (${ROLE_DEFINITIONS[p.role].nameTh})`)
+      .map(
+        (p) =>
+          `${p.name} (${ROLE_DEFINITIONS[p.role].nameTh}${p.room ? ` · ห้อง ${p.room}` : ''})`
+      )
       .join(', ') || 'ไม่มี';
   const ping = intel.secretPing;
   const latestAccompliceClue = isAccomplice

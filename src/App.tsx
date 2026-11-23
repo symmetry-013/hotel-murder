@@ -458,9 +458,16 @@ export default function App() {
         <div className="flex items-center gap-2 min-w-0">
           <Skull className="h-4 w-4 text-[#F87171] shrink-0" />
           <span className="text-[#E5A3AB]">คู่หูฝ่ายฆาตกรของคุณ:</span>
-          <strong className="truncate text-[#FFF1F2]">
+          <strong className="truncate text-[#FFF1F2] font-mono-tabular">
             {intel.evilPartners
-              .map((partner) => `${partner.name} (${ROLE_DEFINITIONS[partner.role].nameTh})`)
+              .map(
+                (partner) =>
+                  `${partner.name} (${ROLE_DEFINITIONS[partner.role].nameTh}${
+                    partner.room
+                      ? ` · ห้อง ${partner.room}${partner.floor ? ` ชั้น ${partner.floor}` : ''}`
+                      : ''
+                  })`
+              )
               .join(', ')}
           </strong>
         </div>
@@ -762,6 +769,7 @@ export default function App() {
                       ) : evilPartnerMatch ? (
                         <span className="text-[#FCA5A5] font-semibold">
                           คู่หูฝ่ายฆาตกร · {ROLE_DEFINITIONS[evilPartnerMatch.role].nameTh}
+                          {evilPartnerMatch.room ? ` · ห้อง ${evilPartnerMatch.room}` : ''}
                         </span>
                       ) : (
                         'ห้องพัก: ??? (ความลับ)'

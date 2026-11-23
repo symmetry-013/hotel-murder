@@ -167,9 +167,9 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     nameTh: 'ฆาตกร',
     nameEn: 'Murderer',
     faction: 'EVIL',
-    shortAbilityTh: 'กลางคืนเลือกฆ่าได้อย่างอิสระทุกห้องทุกชั้น + เห็นตัวผู้ช่วยตั้งแต่เริ่มเกม',
+    shortAbilityTh: 'กลางคืนเลือกฆ่าได้อย่างอิสระทุกห้องทุกชั้น + รู้ตัวและเลขห้องของผู้ช่วยตั้งแต่เริ่มเกม',
     detailTh:
-      'ฝ่ายฆาตกร — เห็นชื่อและบทบาทของผู้ช่วยฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนคุณมีอิสระเต็มที่ในการเลือกสังหารห้องใดก็ได้ที่ยังไม่ถูกปิดทั่วทั้งโรงแรม (จะเชื่อซิกของผู้ช่วยหรือเลือกเองก็ได้ตามใจชอบ!)',
+      'ฝ่ายฆาตกร — เห็นชื่อ บทบาท และเลขห้องพักของผู้ช่วยฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนคุณมีอิสระเต็มที่ในการเลือกสังหารห้องใดก็ได้ที่ยังไม่ถูกปิดทั่วทั้งโรงแรม (จะเชื่อซิกของผู้ช่วยหรือเลือกเองก็ได้ตามใจชอบ!)',
     hasNightAction: true,
     nightTargetType: 'ROOM',
   },
@@ -178,9 +178,9 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     nameTh: 'ผู้ช่วยฆาตกร',
     nameEn: 'Accomplice',
     faction: 'EVIL',
-    shortAbilityTh: 'เห็นตัวฆาตกรตั้งแต่เริ่มเกม + กลางคืนสืบชั้นเหยื่อทันทีแล้วส่งซิกให้ฆาตกร',
+    shortAbilityTh: 'รู้ตัวและเลขห้องของฆาตกรตั้งแต่เริ่มเกม + กลางคืนสืบชั้นเหยื่อทันทีแล้วส่งซิกให้ฆาตกร',
     detailTh:
-      'ฝ่ายฆาตกร — เห็นชื่อและบทบาทของฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนเลือกสืบชื่อผู้เล่น 1 คนเพื่อรู้ชั้นพักทันที พร้อมบันทึกในสมุดเบาะแส และใช้แชทลับใต้ดิน + ปุ่มส่งซิกชี้เป้าให้ฆาตกร!',
+      'ฝ่ายฆาตกร — เห็นชื่อ บทบาท และเลขห้องพักของฆาตกรตั้งแต่เริ่มเกม ช่วงกลางคืนเลือกสืบชื่อผู้เล่น 1 คนเพื่อรู้ชั้นพักทันที พร้อมบันทึกในสมุดเบาะแส และใช้แชทลับใต้ดิน + ปุ่มส่งซิกชี้เป้าให้ฆาตกร!',
     hasNightAction: true,
     nightTargetType: 'PLAYER',
   },
@@ -294,7 +294,14 @@ export interface PrivatePlayerIntel {
   myRoom: HotelRoomNumber | null;
   myFloor: HotelFloorNumber | null;
   myColumn: HotelColumnNumber | null;
-  evilPartners: Array<{ id: string; name: string; role: RoleId }>;
+  evilPartners: Array<{
+    id: string;
+    name: string;
+    role: RoleId;
+    room: HotelRoomNumber | null;
+    floor: HotelFloorNumber | null;
+    column: HotelColumnNumber | null;
+  }>;
   nightActionSubmitted: boolean;
   nightAcknowledged: boolean;
   latestNightResult: PrivateClueLog | null;
@@ -356,7 +363,7 @@ export interface BotPostGameThought {
   role: RoleId;
   alive: boolean;
   thought: string;
-  provider?: 'groq' | 'gemini';
+  provider?: 'groq' | 'gemini' | 'fallback';
 }
 
 export type NightStage = 'ACTION' | 'REVIEW';
