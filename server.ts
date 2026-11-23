@@ -149,6 +149,7 @@ interface GameRoom {
   winReason: string | null;
   aiThoughts: BotPostGameThought[];
   aiThoughtsLoading: boolean;
+  aiThoughtsError: string | null;
   lastKeymasterLockedRoom: HotelRoomNumber | null;
   night: NightSubmissions;
   timers: Set<ReturnType<typeof setTimeout>>;
@@ -384,6 +385,7 @@ function buildPublicRoomState(room: GameRoom): RoomStatePayload {
     winReason: room.winReason,
     aiThoughts: room.aiThoughts,
     aiThoughtsLoading: room.aiThoughtsLoading,
+    aiThoughtsError: room.aiThoughtsError,
     readyCount,
     aliveCount: alivePlayers.length,
     votedCount,
@@ -580,6 +582,51 @@ async function startServer() {
     return null;
   }
 
+  function loadPostGameThoughts(room: GameRoom): void {
+    if (!rooms.has(room.roomCode) || room.phase !== 'GAME_OVER' || !room.winner) return;
+    room.aiThoughtsLoading = true;
+    room.aiThoughtsError = null;
+    broadcastRoomState(room);
+
+    const snapshotPlayers = Array.from(room.players.values()).map((p) => ({
+      id: p.id,
+      name: p.name,
+      isBot: p.isBot,
+      role: p.role ?? 'KEYMASTER',
+      room: p.room,
+      alive: p.alive,
+      gender: p.botProfile?.gender,
+      archetype: p.botProfile?.archetype,
+      persona: p.botProfile?.persona,
+      speechStyle: p.botProfile?.speechStyle,
+      deathCause: p.deathCause,
+      clueLogs: [...p.clueLogs],
+    }));
+
+    void generatePostGameThoughts({
+      winner: room.winner,
+      winnerPlayerName: room.winnerPlayerName,
+      winReason: room.winReason ?? '',
+      players: snapshotPlayers,
+      pastVoteRecords: [...room.pastVoteRecords],
+      historyLog: [...room.historyLog],
+      recentChat: [...room.chat],
+    })
+      .then(({ thoughts, error }) => {
+        if (!rooms.has(room.roomCode) || room.phase !== 'GAME_OVER') return;
+        room.aiThoughts = thoughts;
+        room.aiThoughtsLoading = false;
+        room.aiThoughtsError = error;
+        broadcastRoomState(room);
+      })
+      .catch((err) => {
+        if (!rooms.has(room.roomCode) || room.phase !== 'GAME_OVER') return;
+        room.aiThoughtsLoading = false;
+        room.aiThoughtsError = err instanceof Error ? err.message : 'AI_POSTGAME_ERROR';
+        broadcastRoomState(room);
+      });
+  }
+
   function enterGameOver(
     room: GameRoom,
     winner: Faction,
@@ -596,6 +643,7 @@ async function startServer() {
     room.winReason = reason;
     room.aiThoughts = [];
     room.aiThoughtsLoading = true;
+    room.aiThoughtsError = null;
 
     for (const p of room.players.values()) {
       p.revealedRole = p.role;
@@ -618,37 +666,7 @@ async function startServer() {
       kind: 'ALERT',
     });
 
-    broadcastRoomState(room);
-
-    const snapshotPlayers = Array.from(room.players.values()).map((p) => ({
-      id: p.id,
-      name: p.name,
-      isBot: p.isBot,
-      role: p.role ?? 'KEYMASTER',
-      room: p.room,
-      alive: p.alive,
-      gender: p.botProfile?.gender,
-      archetype: p.botProfile?.archetype,
-      persona: p.botProfile?.persona,
-      speechStyle: p.botProfile?.speechStyle,
-      deathCause: p.deathCause,
-      clueLogs: [...p.clueLogs],
-    }));
-
-    void generatePostGameThoughts({
-      winner,
-      winnerPlayerName,
-      winReason: reason,
-      players: snapshotPlayers,
-      pastVoteRecords: [...room.pastVoteRecords],
-      historyLog: [...room.historyLog],
-      recentChat: [...room.chat],
-    }).then((thoughts) => {
-      if (!rooms.has(room.roomCode) || room.phase !== 'GAME_OVER') return;
-      room.aiThoughts = thoughts;
-      room.aiThoughtsLoading = false;
-      broadcastRoomState(room);
-    });
+    loadPostGameThoughts(room);
   }
 
   function resetBotChatQueue(room: GameRoom): void {
@@ -2042,6 +2060,7 @@ async function startServer() {
     room.winReason = null;
     room.aiThoughts = [];
     room.aiThoughtsLoading = false;
+    room.aiThoughtsError = null;
     room.lastKeymasterLockedRoom = null;
     room.night = freshNightSubmissions();
     resetBotChatQueue(room);
@@ -2083,6 +2102,7 @@ async function startServer() {
     room.winReason = null;
     room.aiThoughts = [];
     room.aiThoughtsLoading = false;
+    room.aiThoughtsError = null;
     room.lastKeymasterLockedRoom = null;
     room.night = freshNightSubmissions();
     resetBotChatQueue(room);
@@ -2179,6 +2199,7 @@ async function startServer() {
           winReason: null,
           aiThoughts: [],
           aiThoughtsLoading: false,
+          aiThoughtsError: null,
           lastKeymasterLockedRoom: null,
           night: freshNightSubmissions(),
           timers: new Set(),
@@ -2341,6 +2362,14 @@ async function startServer() {
       const player = room.players.get(member.playerId);
       if (!player || !player.isHost) return;
       resetRoomToLobby(room);
+    });
+
+    socket.on('game:retryAiThoughts', () => {
+      const member = socketToMembership.get(socket.id);
+      if (!member) return;
+      const room = rooms.get(member.roomCode);
+      if (!room || room.phase !== 'GAME_OVER' || room.aiThoughtsLoading) return;
+      loadPostGameThoughts(room);
     });
 
     // Ready Check during Day Phase -> advances to Room Lynching Vote when 100% ready

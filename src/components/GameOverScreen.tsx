@@ -7,9 +7,15 @@ interface GameOverScreenProps {
   roomState: RoomStatePayload;
   myPlayerId: string | null;
   onPlayAgain: () => void;
+  onRetryAiThoughts: () => void;
 }
 
-export function GameOverScreen({ roomState, myPlayerId, onPlayAgain }: GameOverScreenProps) {
+export function GameOverScreen({
+  roomState,
+  myPlayerId,
+  onPlayAgain,
+  onRetryAiThoughts,
+}: GameOverScreenProps) {
   const me = roomState.players.find((p) => p.id === myPlayerId) ?? null;
   const isHost = Boolean(me?.isHost);
   const goodWon = roomState.winner === 'GOOD';
@@ -97,11 +103,28 @@ export function GameOverScreen({ roomState, myPlayerId, onPlayAgain }: GameOverS
                 </p>
               </div>
             ) : roomState.aiThoughts.length === 0 ? (
-              <p className="py-8 text-center text-sm text-[#9D948A]">
-                {roomState.players.some((p) => p.isBot)
-                  ? 'ไม่สามารถโหลดความคิดสดจาก AI ได้ในขณะนี้ (กรุณาตรวจสอบ API Key ของ Groq หรือ Gemini)'
-                  : 'รอบนี้ไม่มีบอท AI ร่วมเล่น'}
-              </p>
+              <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+                <p className="text-sm text-[#CFC8BF]">
+                  {roomState.players.some((p) => p.isBot)
+                    ? 'ไม่สามารถโหลดความคิดสดจาก AI ได้ในขณะนี้'
+                    : 'รอบนี้ไม่มีบอท AI ร่วมเล่น'}
+                </p>
+                {roomState.aiThoughtsError && (
+                  <p className="max-w-md rounded-md border border-[#3E282C] bg-[#1B1216] px-3 py-2 text-xs text-[#E5A3AB] break-words">
+                    รายละเอียด: {roomState.aiThoughtsError}
+                  </p>
+                )}
+                {roomState.players.some((p) => p.isBot) && (
+                  <button
+                    type="button"
+                    onClick={onRetryAiThoughts}
+                    className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-[#6E572C] bg-[#211B13] px-4 py-2 text-xs font-semibold text-[#F3DC9F] hover:bg-[#2F2518] transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>ลองโหลดความคิด AI ใหม่</span>
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="space-y-3">
                 {roomState.aiThoughts.map((item) => {

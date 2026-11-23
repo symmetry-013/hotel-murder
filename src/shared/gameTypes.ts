@@ -389,6 +389,7 @@ export interface RoomStatePayload {
   winReason: string | null;
   aiThoughts: BotPostGameThought[];
   aiThoughtsLoading: boolean;
+  aiThoughtsError: string | null;
   readyCount: number;
   aliveCount: number;
   votedCount: number;

@@ -410,6 +410,10 @@ export default function App() {
             soundEngine.playClick();
             socketRef.current?.emit('game:playAgain');
           }}
+          onRetryAiThoughts={() => {
+            soundEngine.playClick();
+            socketRef.current?.emit('game:retryAiThoughts');
+          }}
         />
       </>
     );
