@@ -69,7 +69,7 @@ const SETUP_DURATION_MS = 4000;
 const VOTE_DURATION_MS = 60000; // Exact 60 seconds (1 minute) voting timer
 const VOTE_RESULT_DURATION_MS = 5000;
 const NIGHT_DURATION_MS = 120000; // Exact 120 seconds (2 minutes) night skill timer
-const NIGHT_REVIEW_MIN_MS = 20000;
+const NIGHT_REVIEW_DURATION_MS = 20000;
 
 const HUMAN_AVATAR_COLORS = [
   '#C8A25A',
@@ -1444,14 +1444,14 @@ async function startServer() {
       senderName: 'โรงแรมมรณะ',
       isSystem: true,
       isBot: false,
-      text: `ค่ำคืนที่ ${room.day} มาเยือนแล้ว... ไฟทั้ง ${room.totalFloors} ชั้นดับสนิท ผู้มีบทบาทพิเศษจงใช้สกิลภายใน 28 วินาที`,
+      text: `ค่ำคืนที่ ${room.day} มาเยือนแล้ว... ไฟทั้ง ${room.totalFloors} ชั้นดับสนิท ผู้มีบทบาทพิเศษจงใช้สกิลภายใน 2 นาที (120 วินาที) — กดครบและรับทราบข้อมูลทุกคนจะตัดเข้าสู่เช้าทันที`,
       kind: 'ALERT',
     });
 
     broadcastRoomState(room);
 
-    // Schedule AI bot night actions (Accomplice inspects early so they can whisper real floor intel!)
-    const requiredBotActors = getRequiredNightActors(room).filter((p) => p.isBot);
+    // Schedule AI bot & AI Takeover night actions (Accomplice inspects early so they can whisper real floor intel!)
+    const requiredBotActors = getRequiredNightActors(room).filter((p) => isControlledByAI(p));
     requiredBotActors.forEach((bot, idx) => {
       const baseDelay =
         bot.role === 'ACCOMPLICE'
@@ -1468,10 +1468,11 @@ async function startServer() {
               room.night.stage !== 'ACTION' ||
               !bot.alive ||
               !bot.role ||
-              !bot.botProfile ||
+              !isControlledByAI(bot) ||
               !bot.room
             )
               return;
+            const activeBotProfile = ensureTakeoverProfile(bot);
             const evilPartnersList =
               ROLE_DEFINITIONS[bot.role].faction === 'EVIL'
                 ? Array.from(room.players.values()).filter(
@@ -1487,7 +1488,7 @@ async function startServer() {
               .filter((r): r is HotelRoomNumber => r !== null);
 
             const decision = await decideBotNightAction({
-              bot: bot.botProfile,
+              bot: activeBotProfile,
               role: bot.role,
               myRoom: bot.room,
               day: room.day,
@@ -1518,8 +1519,7 @@ async function startServer() {
     const aliveMurderer = getAlivePlayers(room).find((p) => p.role === 'MURDERER');
     if (
       aliveAccomplice &&
-      aliveAccomplice.isBot &&
-      aliveAccomplice.botProfile &&
+      isControlledByAI(aliveAccomplice) &&
       aliveAccomplice.room &&
       aliveMurderer
     ) {
@@ -1531,12 +1531,13 @@ async function startServer() {
               room.phase !== 'NIGHT' ||
               room.night.stage !== 'ACTION' ||
               !aliveAccomplice.alive ||
-              !aliveAccomplice.botProfile ||
+              !isControlledByAI(aliveAccomplice) ||
               !aliveAccomplice.room
             )
               return;
+            const accompliceProfile = ensureTakeoverProfile(aliveAccomplice);
             const res = await generateAccompliceSecretPing({
-              bot: aliveAccomplice.botProfile,
+              bot: accompliceProfile,
               murdererName: aliveMurderer.name,
               murdererRoom: aliveMurderer.room,
               day: room.day,
@@ -1689,7 +1690,7 @@ async function startServer() {
     }
 
     room.night.submittedPlayerIds.add(player.id);
-    if (player.isBot) {
+    if (isControlledByAI(player)) {
       room.night.acknowledgedPlayerIds.add(player.id);
     }
     broadcastRoomState(room);
@@ -1909,9 +1910,9 @@ async function startServer() {
       }
     }
 
-    // Auto-acknowledge all bots so we ONLY wait for human players to read & click Acknowledge!
+    // Auto-acknowledge all bots & AI-taken-over players so we ONLY wait for connected humans to click Acknowledge!
     for (const p of room.players.values()) {
-      if (p.isBot) {
+      if (isControlledByAI(p)) {
         room.night.acknowledgedPlayerIds.add(p.id);
       }
     }
@@ -2029,9 +2030,11 @@ async function startServer() {
     for (const botProfile of roundBots) {
       room.players.set(botProfile.id, {
         id: botProfile.id,
+        playerToken: null,
         socketId: null,
         name: botProfile.name,
         isBot: true,
+        aiTakeover: false,
         isHost: false,
         connected: true,
         alive: true,
@@ -2117,6 +2120,55 @@ async function startServer() {
     scheduleRoomTimer(room, () => startDayPhase(room), SETUP_DURATION_MS);
   }
 
+  async function triggerTakeoverNightAction(room: GameRoom, player: ServerPlayer): Promise<void> {
+    if (
+      room.phase !== 'NIGHT' ||
+      room.night.stage !== 'ACTION' ||
+      !player.alive ||
+      !player.role ||
+      !player.room ||
+      !isControlledByAI(player) ||
+      room.night.submittedPlayerIds.has(player.id)
+    ) {
+      return;
+    }
+    const roleDef = ROLE_DEFINITIONS[player.role];
+    if (!roleDef.hasNightAction) return;
+
+    const botProfile = ensureTakeoverProfile(player);
+    const evilPartnersList =
+      roleDef.faction === 'EVIL'
+        ? Array.from(room.players.values()).filter(
+            (p) => p.id !== player.id && p.role !== null && ROLE_DEFINITIONS[p.role].faction === 'EVIL'
+          )
+        : [];
+
+    const decision = await decideBotNightAction({
+      bot: botProfile,
+      role: player.role,
+      myRoom: player.room,
+      day: room.day,
+      totalFloors: room.totalFloors,
+      unrevealedRooms: getUnrevealedRooms(room),
+      players: toFogBotContextPlayers(room),
+      pastVoteRecords: room.pastVoteRecords,
+      evilPartnerIds: evilPartnersList.map((p) => p.id),
+      evilPartnerRooms: evilPartnersList
+        .map((p) => p.room)
+        .filter((r): r is HotelRoomNumber => r !== null),
+      alreadyCheckedIds: player.checkedPlayerIds,
+      lastKeymasterLockedRoom: room.lastKeymasterLockedRoom,
+      recentChat: room.chat.slice(-15),
+      secretChat: roleDef.faction === 'EVIL' ? room.secretChat : [],
+      secretPing: roleDef.faction === 'EVIL' ? room.secretPing : null,
+      privateClues: player.clueLogs,
+    });
+
+    if (room.phase === 'NIGHT' && room.night.stage === 'ACTION' && isControlledByAI(player)) {
+      applyNightAction(room, player, decision);
+    }
+  }
+
   function resetRoomToLobby(room: GameRoom): void {
     clearRoomTimers(room);
     room.phase = 'LOBBY';
@@ -2150,6 +2202,7 @@ async function startServer() {
       if (p.isBot || !p.connected) {
         room.players.delete(id);
       } else {
+        p.aiTakeover = false;
         p.alive = true;
         p.role = null;
         p.room = null;
@@ -2177,8 +2230,14 @@ async function startServer() {
     socket.on(
       'room:create',
       (
-        payload: { name?: string; maxPlayers?: number },
-        ack?: (res: { ok: boolean; roomCode?: string; playerId?: string; error?: string }) => void
+        payload: { name?: string; maxPlayers?: number; playerToken?: string },
+        ack?: (res: {
+          ok: boolean;
+          roomCode?: string;
+          playerId?: string;
+          playerToken?: string;
+          error?: string;
+        }) => void
       ) => {
         const cleanName = String(payload?.name ?? '').trim().slice(0, 20);
         if (!cleanName) {
@@ -2189,12 +2248,15 @@ async function startServer() {
         const maxPlayers = Math.max(5, Math.min(8, Number(payload?.maxPlayers) || 8));
         const roomCode = generateRoomCode();
         const playerId = uid('p');
+        const playerToken = String(payload?.playerToken || uid('tok')).trim();
 
         const hostPlayer: ServerPlayer = {
           id: playerId,
+          playerToken,
           socketId: socket.id,
           name: cleanName,
           isBot: false,
+          aiTakeover: false,
           isHost: true,
           connected: true,
           alive: true,
@@ -2255,7 +2317,7 @@ async function startServer() {
         socketToMembership.set(socket.id, { roomCode, playerId });
         void socket.join(roomCode);
 
-        ack?.({ ok: true, roomCode, playerId });
+        ack?.({ ok: true, roomCode, playerId, playerToken });
         broadcastRoomState(room);
       }
     );
@@ -2282,11 +2344,19 @@ async function startServer() {
     socket.on(
       'room:join',
       (
-        payload: { roomCode?: string; name?: string; playerId?: string },
-        ack?: (res: { ok: boolean; roomCode?: string; playerId?: string; error?: string }) => void
+        payload: { roomCode?: string; name?: string; playerId?: string; playerToken?: string },
+        ack?: (res: {
+          ok: boolean;
+          roomCode?: string;
+          playerId?: string;
+          playerToken?: string;
+          reconnected?: boolean;
+          error?: string;
+        }) => void
       ) => {
         const code = String(payload?.roomCode ?? '').trim().toUpperCase();
         const cleanName = String(payload?.name ?? '').trim().slice(0, 20);
+        const incomingToken = String(payload?.playerToken ?? '').trim();
         const room = rooms.get(code);
 
         if (!room) {
@@ -2294,17 +2364,56 @@ async function startServer() {
           return;
         }
 
-        if (payload?.playerId && room.players.has(payload.playerId)) {
-          const existing = room.players.get(payload.playerId)!;
-          if (!existing.isBot) {
-            existing.socketId = socket.id;
-            existing.connected = true;
-            socketToMembership.set(socket.id, { roomCode: code, playerId: existing.id });
-            void socket.join(code);
-            ack?.({ ok: true, roomCode: code, playerId: existing.id });
-            broadcastRoomState(room);
-            return;
+        // Auto-Reconnect: match by playerToken -> playerId -> nickname (alive or dead)
+        const existingHuman = Array.from(room.players.values()).find((p) => {
+          if (p.isBot) return false;
+          if (incomingToken && p.playerToken === incomingToken) return true;
+          if (payload?.playerId && p.id === payload.playerId) return true;
+          if (
+            cleanName &&
+            p.name.toLowerCase() === cleanName.toLowerCase() &&
+            (!p.connected || p.aiTakeover)
+          ) {
+            return true;
           }
+          return false;
+        });
+
+        if (existingHuman) {
+          const wasAiTakeover = existingHuman.aiTakeover;
+          if (existingHuman.socketId && existingHuman.socketId !== socket.id) {
+            socketToMembership.delete(existingHuman.socketId);
+          }
+          existingHuman.socketId = socket.id;
+          existingHuman.connected = true;
+          existingHuman.aiTakeover = false;
+          if (incomingToken && !existingHuman.playerToken) {
+            existingHuman.playerToken = incomingToken;
+          }
+
+          socketToMembership.set(socket.id, { roomCode: code, playerId: existingHuman.id });
+          void socket.join(code);
+
+          if (room.phase !== 'LOBBY' && wasAiTakeover) {
+            pushChat(room, {
+              senderId: 'SYSTEM',
+              senderName: 'ระบบเชื่อมต่อ',
+              isSystem: true,
+              isBot: false,
+              text: `${existingHuman.name} กลับเข้าเกมแล้ว — คืนสิทธิ์ควบคุมตัวละครจากบอท AI ทันที!`,
+              kind: 'INFO',
+            });
+          }
+
+          ack?.({
+            ok: true,
+            roomCode: code,
+            playerId: existingHuman.id,
+            playerToken: existingHuman.playerToken ?? undefined,
+            reconnected: true,
+          });
+          broadcastRoomState(room);
+          return;
         }
 
         if (!cleanName) {
@@ -2312,7 +2421,10 @@ async function startServer() {
           return;
         }
         if (room.phase !== 'LOBBY') {
-          ack?.({ ok: false, error: 'ห้องนี้เริ่มเกมไปแล้ว รอรอบถัดไปนะ' });
+          ack?.({
+            ok: false,
+            error: 'ห้องนี้เริ่มเกมไปแล้ว หากเคยอยู่ในห้องนี้ให้กรอกชื่อเดิมเพื่อกลับเข้าควบคุมตัวละคร',
+          });
           return;
         }
 
@@ -2327,11 +2439,14 @@ async function startServer() {
         }
 
         const playerId = uid('p');
+        const playerToken = incomingToken || uid('tok');
         const newPlayer: ServerPlayer = {
           id: playerId,
+          playerToken,
           socketId: socket.id,
           name: cleanName,
           isBot: false,
+          aiTakeover: false,
           isHost: false,
           connected: true,
           alive: true,
@@ -2358,7 +2473,7 @@ async function startServer() {
         socketToMembership.set(socket.id, { roomCode: code, playerId });
         void socket.join(code);
 
-        ack?.({ ok: true, roomCode: code, playerId });
+        ack?.({ ok: true, roomCode: code, playerId, playerToken, reconnected: false });
         broadcastRoomState(room);
       }
     );
@@ -2696,21 +2811,56 @@ async function startServer() {
       return;
     }
 
+    // ห้ามลบตัวละครระหว่างเกม — เปลี่ยนเป็น AI Takeover เล่นแทนชั่วคราว
     player.connected = false;
     player.socketId = null;
+    player.aiTakeover = true;
+    ensureTakeoverProfile(player);
+
+    pushChat(room, {
+      senderId: 'SYSTEM',
+      senderName: 'ระบบเชื่อมต่อ',
+      isSystem: true,
+      isBot: false,
+      text: `${player.name} ขาดการเชื่อมต่อชั่วคราว — บอท AI เข้าสวมรอยเล่นแทนจนกว่าจะกลับเข้ามา`,
+      kind: 'ALERT',
+    });
 
     if (room.phase === 'DAY' && player.alive && !player.readyToVote) {
       scheduleRoomTimer(
         room,
         () => {
-          if (!player.connected && room.phase === 'DAY' && player.alive) {
+          if (player.aiTakeover && room.phase === 'DAY' && player.alive) {
             player.readyToVote = true;
             broadcastRoomState(room);
             checkAllReadyToVote(room);
           }
         },
-        12000
+        4000
       );
+    } else if (room.phase === 'VOTE' && player.alive && player.dayVote === null) {
+      scheduleRoomTimer(
+        room,
+        () => {
+          if (player.aiTakeover && room.phase === 'VOTE' && player.alive && player.dayVote === null) {
+            void runSequentialBotVotes(room, true);
+          }
+        },
+        2000
+      );
+    } else if (room.phase === 'NIGHT') {
+      if (room.night.stage === 'ACTION') {
+        scheduleRoomTimer(
+          room,
+          () => {
+            void triggerTakeoverNightAction(room, player);
+          },
+          2000
+        );
+      } else if (room.night.stage === 'REVIEW') {
+        room.night.acknowledgedPlayerIds.add(player.id);
+        tryFinishNightReviewEarly(room);
+      }
     }
 
     const connectedHumans = Array.from(room.players.values()).filter(
@@ -2726,7 +2876,7 @@ async function startServer() {
             rooms.delete(room.roomCode);
           }
         },
-        45000
+        180000
       );
     } else if (player.isHost) {
       player.isHost = false;

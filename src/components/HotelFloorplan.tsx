@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   Ban,
   Columns3,
@@ -104,6 +105,13 @@ export function HotelFloorplan({
   const pingedRoom = intel?.secretPing?.kind === 'ROOM' ? intel.secretPing.room : null;
   const pingedFloor = intel?.secretPing?.kind === 'FLOOR' ? intel.secretPing.floor : null;
   const lastLockedRoom = intel?.lastKeymasterLockedRoom ?? null;
+  const [pendingKillRoom, setPendingKillRoom] = useState<HotelRoomNumber | null>(null);
+
+  useEffect(() => {
+    if (!canMurdererPickRoom) {
+      setPendingKillRoom(null);
+    }
+  }, [canMurdererPickRoom, day]);
 
   const actionGuide = (() => {
     if (!isAlive) return 'สถานะวิญญาณผู้ชม — ห้องที่ยังไม่เปิดถูกปิดบังเป็นความลับทั้งหมด';
@@ -317,8 +325,10 @@ export function HotelFloorplan({
           return (
             <div
               key={floor}
-              className={`grid grid-cols-[78px_1fr] sm:grid-cols-[118px_1fr] gap-2 sm:gap-2.5 items-stretch rounded-lg transition-colors ${
-                isFloorPinged ? 'ring-1 ring-[#FDE047]/70 bg-[#2C1116]/40 p-0.5 -m-0.5' : ''
+              className={`grid grid-cols-[78px_1fr] sm:grid-cols-[118px_1fr] gap-2 sm:gap-2.5 items-stretch rounded-xl transition-all ${
+                isFloorPinged
+                  ? 'border-2 border-[#EF4444] bg-[#3B0D14]/70 p-1.5 -mx-1.5 shadow-[0_0_24px_rgba(239,68,68,0.55)] animate-floor-target-pulse'
+                  : ''
               }`}
             >
               {/* Left Floor Column: Night Housekeeper/Witness | Day 2+ Floor Lockdown | Day 1 Locked | Static */}
@@ -447,13 +457,17 @@ export function HotelFloorplan({
                     isRepeatLockBanned ||
                     isMurdererSelfBanned;
 
+                  const isPendingKill = canMurdererPickRoom && pendingKillRoom === roomNum;
+
                   const handleClick = () => {
                     if (isDisabledTile) return;
                     if (canVote) {
                       onVoteRoom(roomNum);
                     } else if (canAccomplicePing) {
                       onAccomplicePingRoom(roomNum);
-                    } else if (canMurdererPickRoom || canKeymasterPickRoom) {
+                    } else if (canMurdererPickRoom) {
+                      setPendingKillRoom(roomNum);
+                    } else if (canKeymasterPickRoom) {
                       onNightSelectRoom(roomNum);
                     }
                   };
@@ -490,6 +504,9 @@ export function HotelFloorplan({
                   } else if (isInMyVotedArea) {
                     tileStyle =
                       'border-[#DC2626]/80 bg-[#2E1117] text-[#FEE2E2] cursor-pointer';
+                  } else if (isPendingKill) {
+                    tileStyle =
+                      'border-2 border-[#EF4444] bg-[#5C121B] text-white shadow-[0_0_18px_rgba(239,68,68,0.6)] cursor-pointer';
                   } else if (isSelectedNight) {
                     tileStyle =
                       myRole === 'MURDERER'
@@ -659,6 +676,41 @@ export function HotelFloorplan({
           );
         })}
       </div>
+
+      {/* Murderer Explicit Kill Confirmation Bar */}
+      {canMurdererPickRoom && (
+        <div className="rounded-xl border-2 border-[#B91C1C] bg-[#280D12] p-3.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="text-xs sm:text-sm text-[#FECACA]">
+            {pendingKillRoom ? (
+              <>
+                เป้าหมายที่เลือกไว้:{' '}
+                <strong className="font-mono-tabular text-base text-[#FDE047]">
+                  ห้อง {pendingKillRoom} (ชั้น {Math.floor(pendingKillRoom / 100)})
+                </strong>
+              </>
+            ) : (
+              'แตะเลือกห้องที่ต้องการสังหารบนแผนผังได้ทุกชั้นอย่างอิสระ (กรอบแดงกระพริบ = ชั้นที่ผู้ช่วยส่งซิก)'
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={!pendingKillRoom}
+            onClick={() => {
+              if (!pendingKillRoom) return;
+              onNightSelectRoom(pendingKillRoom);
+              setPendingKillRoom(null);
+            }}
+            className="min-h-[48px] shrink-0 inline-flex items-center justify-center gap-2 rounded-xl bg-[#DC2626] px-5 py-2.5 text-sm font-bold text-white shadow-[0_0_20px_rgba(220,38,38,0.5)] hover:bg-[#EF4444] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
+          >
+            <Crosshair className="h-4 w-4" />
+            <span>
+              {pendingKillRoom
+                ? `ยืนยันเป้าหมายสังหาร · ห้อง ${pendingKillRoom}`
+                : 'ยืนยันเป้าหมายสังหาร'}
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Compact Legend */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-[#251F24] pt-2.5 text-[11px] text-[#9D948A]">

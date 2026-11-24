@@ -61,6 +61,50 @@ function readInitialInviteCode(): string | null {
   return raw && raw.length >= 4 ? raw : null;
 }
 
+const SESSION_STORAGE_KEY = 'hotel_murder_session';
+const TOKEN_STORAGE_KEY = 'hotel_murder_token';
+
+interface StoredSession {
+  roomCode: string;
+  nickname: string;
+  playerId: string;
+  playerToken: string;
+}
+
+function getOrCreatePlayerToken(): string {
+  try {
+    let token = localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (!token) {
+      token = `tok_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    }
+    return token;
+  } catch {
+    return `tok_${Date.now().toString(36)}`;
+  }
+}
+
+function readStoredSession(): StoredSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredSession>;
+    if (!parsed.roomCode || !parsed.nickname || !parsed.playerToken) return null;
+    return parsed as StoredSession;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredSession(session: StoredSession | null): void {
+  try {
+    if (!session) localStorage.removeItem(SESSION_STORAGE_KEY);
+    else localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // ignore storage failure
+  }
+}
+
 export default function App() {
   const socketRef = useRef<Socket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -113,6 +157,41 @@ export default function App() {
 
     socket.on('connect', () => {
       const urlCode = readInitialInviteCode();
+      const saved = readStoredSession();
+
+      if (saved && (!urlCode || urlCode === saved.roomCode)) {
+        socket.emit(
+          'room:join',
+          {
+            roomCode: saved.roomCode,
+            name: saved.nickname,
+            playerId: saved.playerId,
+            playerToken: saved.playerToken,
+          },
+          (res: { ok: boolean; roomCode?: string; playerId?: string; playerToken?: string }) => {
+            if (res?.ok && res.playerId && res.roomCode) {
+              setMyPlayerId(res.playerId);
+              setInviteRoomCode(null);
+              saveStoredSession({
+                roomCode: res.roomCode,
+                nickname: saved.nickname,
+                playerId: res.playerId,
+                playerToken: res.playerToken ?? saved.playerToken,
+              });
+              window.history.replaceState({}, '', `${window.location.pathname}?room=${res.roomCode}`);
+            } else {
+              saveStoredSession(null);
+              if (urlCode) {
+                socket.emit('room:check', { roomCode: urlCode }, (checkRes: { exists: boolean }) => {
+                  setInviteRoomExists(Boolean(checkRes?.exists));
+                });
+              }
+            }
+          }
+        );
+        return;
+      }
+
       if (urlCode) {
         socket.emit('room:check', { roomCode: urlCode }, (res: { exists: boolean }) => {
           setInviteRoomExists(Boolean(res?.exists));
@@ -260,16 +339,23 @@ export default function App() {
     persistNickname(nickname);
     soundEngine.playClick();
 
+    const playerToken = getOrCreatePlayerToken();
     socket.emit(
       'room:create',
-      { name: nickname, maxPlayers },
-      (res: { ok: boolean; roomCode?: string; playerId?: string; error?: string }) => {
+      { name: nickname, maxPlayers, playerToken },
+      (res: { ok: boolean; roomCode?: string; playerId?: string; playerToken?: string; error?: string }) => {
         setBusy(false);
         if (!res?.ok || !res.playerId || !res.roomCode) {
           setErrorMessage(res?.error ?? 'ไม่สามารถสร้างห้องได้');
           return;
         }
         setMyPlayerId(res.playerId);
+        saveStoredSession({
+          roomCode: res.roomCode,
+          nickname,
+          playerId: res.playerId,
+          playerToken: res.playerToken ?? playerToken,
+        });
         window.history.replaceState({}, '', `${window.location.pathname}?room=${res.roomCode}`);
       }
     );
@@ -283,10 +369,11 @@ export default function App() {
     persistNickname(nickname);
     soundEngine.playClick();
 
+    const playerToken = getOrCreatePlayerToken();
     socket.emit(
       'room:join',
-      { roomCode, name: nickname },
-      (res: { ok: boolean; roomCode?: string; playerId?: string; error?: string }) => {
+      { roomCode, name: nickname, playerToken },
+      (res: { ok: boolean; roomCode?: string; playerId?: string; playerToken?: string; error?: string }) => {
         setBusy(false);
         if (!res?.ok || !res.playerId || !res.roomCode) {
           setErrorMessage(res?.error ?? 'ไม่สามารถเข้าห้องได้');
@@ -294,6 +381,12 @@ export default function App() {
         }
         setMyPlayerId(res.playerId);
         setInviteRoomCode(null);
+        saveStoredSession({
+          roomCode: res.roomCode,
+          nickname,
+          playerId: res.playerId,
+          playerToken: res.playerToken ?? playerToken,
+        });
         window.history.replaceState({}, '', `${window.location.pathname}?room=${res.roomCode}`);
       }
     );
@@ -301,6 +394,7 @@ export default function App() {
 
   const handleLeaveRoom = () => {
     soundEngine.playClick();
+    saveStoredSession(null);
     socketRef.current?.emit('room:leave');
     setRoomState(null);
     setIntel(null);
@@ -637,6 +731,7 @@ export default function App() {
         onSendSecretChat={handleSendSecretChat}
         onPingFloor={handleAccomplicePingFloor}
         onPingPlayer={handleAccomplicePingPlayer}
+        onInspectPlayer={handleNightAction}
       />
     ) : null;
 
@@ -666,9 +761,23 @@ export default function App() {
           </div>
         </div>
 
-        <span className="font-mono-tabular text-xs font-semibold text-[#F3DC9F]">
-          โหวตแล้ว {roomState.votedCount}/{roomState.aliveCount} คน
-        </span>
+        <div className="flex items-center gap-2">
+          {secondsLeft !== null && (
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono-tabular text-xs font-bold ${
+                secondsLeft <= 10
+                  ? 'border-[#EF4444] bg-[#7F1D1D] text-white animate-pulse'
+                  : 'border-[#C8A25A]/60 bg-[#2C1A12] text-[#FDE047]'
+              }`}
+            >
+              <Clock className="h-3.5 w-3.5" />
+              <span>เหลือเวลาโหวต {secondsLeft}s</span>
+            </span>
+          )}
+          <span className="font-mono-tabular text-xs font-semibold text-[#F3DC9F]">
+            โหวตแล้ว {roomState.votedCount}/{roomState.aliveCount} คน
+          </span>
+        </div>
       </div>
 
       {isAlive && (
@@ -765,6 +874,11 @@ export default function App() {
                       {isMe ? ' (คุณ)' : ''}
                     </span>
                     {p.isBot && <Bot className="h-3 w-3 shrink-0 text-[#8D847C]" />}
+                    {p.aiTakeover && (
+                      <span className="rounded bg-[#3B2610] border border-[#C8A25A]/50 px-1.5 py-0.5 text-[10px] font-semibold text-[#FDE047] shrink-0">
+                        AI เล่นแทน
+                      </span>
+                    )}
                   </div>
                   <p className="font-mono-tabular text-[11px] text-[#9D948A]">
                     {p.alive ? (

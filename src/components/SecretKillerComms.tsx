@@ -17,6 +17,7 @@ interface SecretKillerCommsProps {
   onSendSecretChat: (text: string) => void;
   onPingFloor: (floor: HotelFloorNumber) => void;
   onPingPlayer: (playerId: string) => void;
+  onInspectPlayer?: (playerId: string) => void;
 }
 
 export function SecretKillerComms({
@@ -29,6 +30,7 @@ export function SecretKillerComms({
   onSendSecretChat,
   onPingFloor,
   onPingPlayer,
+  onInspectPlayer,
 }: SecretKillerCommsProps) {
   const [text, setText] = useState('');
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -113,36 +115,75 @@ export function SecretKillerComms({
         </div>
       )}
 
-      {/* Accomplice Signal / Ping Target Controls (Room + Dynamic Floors + Player) */}
+      {/* Accomplice 2-Step Night Skill UI */}
       {isAccomplice && (
-        <div className="rounded-lg border border-[#521A22] bg-[#140A0D] p-3 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-[#FCA5A5]">
-              ส่งซิกชี้เป้าให้ฆาตกร (Signal Target)
-            </span>
-            <button
-              type="button"
-              onClick={onTogglePingMode}
-              className={`min-h-[38px] inline-flex items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-                pingModeActive
-                  ? 'bg-[#DC2626] text-white'
-                  : 'border border-[#882530] bg-[#291116] text-[#FECACA] hover:bg-[#3A151D]'
-              }`}
-            >
-              <Crosshair className="h-3.5 w-3.5" />
-              <span>
-                {pingModeActive ? 'กำลังชี้เป้าห้องบนผัง (คลิกปิด)' : 'กดจิ้มห้องชี้เป้าบนผัง'}
+        <div className="space-y-3">
+          {/* ขั้นตอนที่ 1: ส่องชั้นพักผู้เล่นเป็นการ์ดใหญ่กดง่าย */}
+          <div className="rounded-xl border border-[#7A202B] bg-[#170A0E] p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs sm:text-sm font-bold text-[#FDE047]">
+                ขั้นตอนที่ 1 · ส่องชั้นพักผู้เล่น (เลือก 1 คน)
               </span>
-            </button>
+              {intel.nightActionSubmitted && (
+                <span className="rounded-full bg-[#15362A] border border-[#34D399]/50 px-2 py-0.5 text-[10px] font-semibold text-[#6EE7B7]">
+                  ✓ ส่องและบันทึกลงสมุดแล้ว
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {alivePlayers
+                .filter(
+                  (p) =>
+                    p.id !== myPlayerId &&
+                    !intel.evilPartners.some((partner) => partner.id === p.id)
+                )
+                .map((target) => {
+                  const isPicked = intel.selectedNightTarget === target.id;
+                  const locked = Boolean(intel.nightActionSubmitted);
+                  return (
+                    <button
+                      key={target.id}
+                      type="button"
+                      disabled={locked || !onInspectPlayer}
+                      onClick={() => onInspectPlayer?.(target.id)}
+                      className={`min-h-[54px] rounded-xl border px-3 py-2.5 text-left transition-all ${
+                        isPicked
+                          ? 'border-[#FDE047] bg-[#3E131B] text-[#FEF08A] shadow-[0_0_14px_rgba(253,224,71,0.25)]'
+                          : 'border-[#542028] bg-[#220F14] text-[#FFF1F2] hover:border-[#EF4444] hover:bg-[#31121A]'
+                      } ${locked ? 'cursor-default opacity-80' : 'cursor-pointer active:scale-[0.98]'}`}
+                    >
+                      <div className="truncate text-sm font-bold">{target.name}</div>
+                      <div className="text-[11px] text-[#E5A3AB]">
+                        {isPicked ? '✓ ส่องชั้นแล้ว' : 'แตะเพื่อส่องชั้นพัก'}
+                      </div>
+                    </button>
+                  );
+                })}
+            </div>
           </div>
 
-          {/* Dynamic Quick Floor Signal Buttons (1..totalFloors) */}
-          <div className="space-y-1">
-            <span className="inline-flex items-center gap-1 text-[11px] text-[#C88D95]">
-              <Layers className="h-3 w-3" />
-              <span>ส่งซิกชั้นที่สืบเจอให้ฆาตกร (ชั้น 1–{totalFloors}):</span>
-            </span>
-            <div className="flex flex-wrap gap-1.5">
+          {/* ขั้นตอนที่ 2: ปุ่มส่งซิกชี้เป้าทั้งชั้นให้ฆาตกร */}
+          <div className="rounded-xl border border-[#7A202B] bg-[#170A0E] p-3.5 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-[#FCA5A5]">
+                <Layers className="h-4 w-4 text-[#F87171]" />
+                <span>ขั้นตอนที่ 2 · ส่งซิกชี้เป้าไปที่ชั้นนี้ (ชั้น 1–{totalFloors})</span>
+              </span>
+              <button
+                type="button"
+                onClick={onTogglePingMode}
+                className={`min-h-[34px] inline-flex items-center gap-1 rounded-md px-2.5 text-[11px] font-semibold transition-colors cursor-pointer ${
+                  pingModeActive
+                    ? 'bg-[#DC2626] text-white'
+                    : 'border border-[#6B242B] bg-[#241015] text-[#FECACA] hover:bg-[#36141C]'
+                }`}
+              >
+                <Crosshair className="h-3.5 w-3.5" />
+                <span>{pingModeActive ? 'ปิดโหมดจิ้มรายห้อง' : 'หรือจิ้มชี้รายห้อง'}</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {activeFloorsAsc.map((floor) => {
                 const active = ping?.kind === 'FLOOR' && ping.floor === floor;
                 return (
@@ -150,36 +191,40 @@ export function SecretKillerComms({
                     key={floor}
                     type="button"
                     onClick={() => onPingFloor(floor)}
-                    className={`min-h-[36px] min-w-[54px] flex-1 rounded-md border font-mono-tabular text-xs font-semibold transition-colors cursor-pointer ${
+                    className={`min-h-[52px] flex flex-col items-center justify-center rounded-xl border font-mono-tabular transition-all cursor-pointer active:scale-[0.98] ${
                       active
-                        ? 'border-[#FDE047] bg-[#4C141D] text-[#FDE047]'
-                        : 'border-[#4D1E25] bg-[#221015] text-[#F5D0D5] hover:border-[#EF4444]'
+                        ? 'border-[#EF4444] bg-[#7F1D1D] text-white shadow-[0_0_18px_rgba(239,68,68,0.65)] animate-floor-target-pulse'
+                        : 'border-[#612029] bg-[#241015] text-[#FECACA] hover:border-[#EF4444] hover:bg-[#3A141D]'
                     }`}
                   >
-                    ชั้น {floor}
+                    <span className="text-sm font-bold">ชั้น {floor}</span>
+                    <span className="text-[10px] opacity-90">
+                      {active ? 'กำลังกระพริบชี้เป้า!' : 'ส่งซิกชี้เป้าชั้นนี้'}
+                    </span>
                   </button>
                 );
               })}
             </div>
-          </div>
 
-          {/* Quick Player Name Signal Buttons */}
-          <div className="flex flex-wrap gap-1.5">
-            {alivePlayers
-              .filter(
-                (p) =>
-                  p.id !== myPlayerId && !intel.evilPartners.some((partner) => partner.id === p.id)
-              )
-              .map((suspect) => (
-                <button
-                  key={suspect.id}
-                  type="button"
-                  onClick={() => onPingPlayer(suspect.id)}
-                  className="min-h-[34px] rounded-md border border-[#4D1E25] bg-[#221015] px-2.5 text-xs text-[#F5D0D5] hover:border-[#EF4444] hover:bg-[#33131A] transition-colors cursor-pointer"
-                >
-                  ชี้เป้า {suspect.name}
-                </button>
-              ))}
+            {/* ชี้เป้าชื่อผู้เล่นเสริม */}
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {alivePlayers
+                .filter(
+                  (p) =>
+                    p.id !== myPlayerId &&
+                    !intel.evilPartners.some((partner) => partner.id === p.id)
+                )
+                .map((suspect) => (
+                  <button
+                    key={suspect.id}
+                    type="button"
+                    onClick={() => onPingPlayer(suspect.id)}
+                    className="min-h-[34px] rounded-md border border-[#4D1E25] bg-[#221015] px-2.5 text-xs text-[#F5D0D5] hover:border-[#EF4444] hover:bg-[#33131A] transition-colors cursor-pointer"
+                  >
+                    ชี้เป้า {suspect.name}
+                  </button>
+                ))}
+            </div>
           </div>
         </div>
       )}
