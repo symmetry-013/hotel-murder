@@ -49,6 +49,7 @@ import type {
   PastVoteRecord,
 } from './server/aiProvider.ts';
 import {
+  BOT_PERSONAS,
   createRoundBotProfiles,
   decideBotDayVote,
   decideBotNightAction,
@@ -65,10 +66,10 @@ const PORT = Number(process.env.PORT || 3000);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 const SETUP_DURATION_MS = 4000;
-const VOTE_DURATION_MS = 65000;
+const VOTE_DURATION_MS = 60000; // Exact 60 seconds (1 minute) voting timer
 const VOTE_RESULT_DURATION_MS = 5000;
-const NIGHT_DURATION_MS = 28000;
-const NIGHT_REVIEW_DURATION_MS = 22000;
+const NIGHT_DURATION_MS = 120000; // Exact 120 seconds (2 minutes) night skill timer
+const NIGHT_REVIEW_MIN_MS = 20000;
 
 const HUMAN_AVATAR_COLORS = [
   '#C8A25A',
@@ -83,9 +84,11 @@ const HUMAN_AVATAR_COLORS = [
 
 interface ServerPlayer {
   id: string;
+  playerToken: string | null;
   socketId: string | null;
   name: string;
   isBot: boolean;
+  aiTakeover: boolean;
   isHost: boolean;
   connected: boolean;
   alive: boolean;
@@ -111,6 +114,7 @@ interface NightResolvedOutcome {
 
 interface NightSubmissions {
   stage: NightStage;
+  nightDeadlineAt: number | null;
   murdererRoom: HotelRoomNumber | null;
   keymasterRoom: HotelRoomNumber | null;
   housekeeperFloor: HotelFloorNumber | null;
@@ -209,9 +213,10 @@ function clearRoomTimers(room: GameRoom): void {
   room.timers.clear();
 }
 
-function freshNightSubmissions(): NightSubmissions {
+function freshNightSubmissions(deadlineAt: number | null = null): NightSubmissions {
   return {
     stage: 'ACTION',
+    nightDeadlineAt: deadlineAt,
     murdererRoom: null,
     keymasterRoom: null,
     housekeeperFloor: null,
@@ -224,6 +229,27 @@ function freshNightSubmissions(): NightSubmissions {
     tonightResultsByPlayerId: new Map<string, PrivateClueLog>(),
     resolvedOutcome: null,
   };
+}
+
+function isControlledByAI(player: ServerPlayer): boolean {
+  return player.isBot || player.aiTakeover;
+}
+
+function ensureTakeoverProfile(player: ServerPlayer): BotProfile {
+  if (player.botProfile) return player.botProfile;
+  const template = BOT_PERSONAS[Math.floor(Math.random() * BOT_PERSONAS.length)] ?? BOT_PERSONAS[0];
+  player.botProfile = {
+    id: player.id,
+    code: template.code,
+    name: player.name,
+    gender: template.gender,
+    archetype: template.archetype,
+    persona: template.persona,
+    speechStyle: template.speechStyle,
+    preferredProvider: 'groq',
+    avatarColor: player.avatarColor,
+  };
+  return player.botProfile;
 }
 
 function getAlivePlayers(room: GameRoom): ServerPlayer[] {
@@ -272,7 +298,7 @@ function getRequiredNightActors(room: GameRoom): ServerPlayer[] {
 
 function getRequiredHumanAckActors(room: GameRoom): ServerPlayer[] {
   return Array.from(room.players.values()).filter(
-    (p) => !p.isBot && p.connected && room.night.tonightResultsByPlayerId.has(p.id)
+    (p) => !isControlledByAI(p) && p.connected && room.night.tonightResultsByPlayerId.has(p.id)
   );
 }
 
@@ -337,6 +363,7 @@ function buildPublicRoomState(room: GameRoom): RoomStatePayload {
     id: p.id,
     name: p.name,
     isBot: p.isBot,
+    aiTakeover: p.aiTakeover,
     isHost: p.isHost,
     connected: p.connected,
     alive: p.alive,
@@ -692,9 +719,9 @@ async function startServer() {
     if (!rooms.has(room.roomCode)) return;
     if (room.phase !== 'DAY' && room.phase !== 'VOTE') return;
 
-    // Enqueue requested bots into the single per-room sequential queue
+    // Enqueue requested AI-controlled players (permanent bots + AI Takeover) into single per-room sequential queue
     for (const bot of botsToSpeak) {
-      if (!bot.alive || !bot.isBot) continue;
+      if (!bot.alive || !isControlledByAI(bot)) continue;
       if (room.botChatQueue.length >= 6) break;
       room.botChatQueue.push({
         botId: bot.id,
@@ -717,7 +744,8 @@ async function startServer() {
 
         const job = room.botChatQueue.shift()!;
         const bot = room.players.get(job.botId);
-        if (!bot || !bot.alive || !bot.botProfile || !bot.role || !bot.room) continue;
+        if (!bot || !bot.alive || !isControlledByAI(bot) || !bot.role || !bot.room) continue;
+        const activeProfile = ensureTakeoverProfile(bot);
 
         // 1. Emit real-time Typing Indicator BEFORE calling LLM
         io.to(room.roomCode).emit('chat:typing', {
@@ -732,7 +760,7 @@ async function startServer() {
         }
 
         const result = await generateBotChat({
-          bot: bot.botProfile,
+          bot: activeProfile,
           role: bot.role,
           myRoom: bot.room,
           myFloor: getFloorOfRoom(bot.room),
@@ -765,13 +793,13 @@ async function startServer() {
 
         if (!rooms.has(room.roomCode)) break;
         if (room.phase !== expectedPhase || room.conversationGenerationId !== loopGen) break;
-        if (!bot.alive) continue;
+        if (!bot.alive || !isControlledByAI(bot)) continue;
 
         pushChat(room, {
           senderId: bot.id,
           senderName: bot.name,
           isSystem: false,
-          isBot: true,
+          isBot: isControlledByAI(bot),
           text: result.text,
           kind: 'CHAT',
         });
@@ -797,16 +825,16 @@ async function startServer() {
 
   function accelerateBotsReadyIfHumansReady(room: GameRoom): void {
     if (room.phase !== 'DAY') return;
-    const aliveHumans = getAlivePlayers(room).filter((p) => !p.isBot);
+    const aliveHumans = getAlivePlayers(room).filter((p) => !isControlledByAI(p));
     const allHumansReady = aliveHumans.length > 0 && aliveHumans.every((h) => h.readyToVote);
     if (!allHumansReady) return;
 
-    const unreadyBots = getAlivePlayers(room).filter((p) => p.isBot && !p.readyToVote);
+    const unreadyBots = getAlivePlayers(room).filter((p) => isControlledByAI(p) && !p.readyToVote);
     unreadyBots.forEach((bot, idx) => {
       scheduleRoomTimer(
         room,
         () => {
-          if (room.phase !== 'DAY' || !bot.alive || bot.readyToVote) return;
+          if (room.phase !== 'DAY' || !bot.alive || bot.readyToVote || !isControlledByAI(bot)) return;
           bot.readyToVote = true;
           broadcastRoomState(room);
           checkAllReadyToVote(room);
@@ -861,9 +889,9 @@ async function startServer() {
 
     broadcastRoomState(room);
 
-    const aliveBots = shuffle(getAlivePlayers(room).filter((p) => p.isBot));
+    const aliveBots = shuffle(getAlivePlayers(room).filter((p) => isControlledByAI(p)));
 
-    // Randomly pick 3–5 living bots per Day/Morning round (capped at <= 12 req/min with 4-5s spacing!)
+    // Randomly pick 3–5 living AI-controlled players per Day/Morning round
     const targetSpeakerCount = Math.min(aliveBots.length, 3 + Math.floor(Math.random() * 3));
     const botsWithFreshClues = aliveBots.filter((b) =>
       b.clueLogs.some((c) => c.night === room.day - 1)
@@ -888,7 +916,7 @@ async function startServer() {
       scheduleRoomTimer(
         room,
         () => {
-          if (room.phase !== 'DAY' || !bot.alive || bot.readyToVote) return;
+          if (room.phase !== 'DAY' || !bot.alive || bot.readyToVote || !isControlledByAI(bot)) return;
           bot.readyToVote = true;
           broadcastRoomState(room);
           checkAllReadyToVote(room);
@@ -905,11 +933,13 @@ async function startServer() {
     if (room.botVoteRunning || room.phase !== 'VOTE') return;
     room.botVoteRunning = true;
     try {
-      const bots = shuffle(getAlivePlayers(room).filter((p) => p.isBot && p.dayVote === null));
+      const bots = shuffle(
+        getAlivePlayers(room).filter((p) => isControlledByAI(p) && p.dayVote === null)
+      );
       for (let i = 0; i < bots.length; i++) {
         if (!rooms.has(room.roomCode) || room.phase !== 'VOTE') break;
         const bot = bots[i];
-        if (!bot.alive || bot.dayVote !== null) continue;
+        if (!bot.alive || bot.dayVote !== null || !isControlledByAI(bot)) continue;
         await submitBotRoomVote(room, bot);
         if (i < bots.length - 1 && room.phase === 'VOTE') {
           await delayMs(fastMode || room.day <= 1 ? 1100 : 2800 + Math.floor(Math.random() * 1200));
@@ -921,7 +951,7 @@ async function startServer() {
   }
 
   /**
-   * PROGRESSIVE DAY VOTE PHASE:
+   * PROGRESSIVE DAY VOTE PHASE (60-Second Voting Timer):
    * - Day 1: Open 1 unrevealed Room only
    * - Day 2: Open 1 Room OR Lock down 1 Horizontal Floor
    * - Day 3-4: Full 3 Modes (Room / Horizontal Floor / Vertical Column)
@@ -947,10 +977,10 @@ async function startServer() {
 
     const voteBannerText =
       room.day >= 3
-        ? `เปิดหีบโหวต วันที่ ${room.day}/${room.maxDays}! ปลดล็อกเต็มรูปแบบครบ 3 แบบ: [เปิด 1 ห้อง] / [ปิดตาย 1 ชั้นแนวนอน] / [ปิดตาย 1 แถวแนวตั้ง] — คะแนนสูงสุดชนะ!`
+        ? `เปิดหีบโหวต วันที่ ${room.day}/${room.maxDays} (เวลา 60 วินาที)! ปลดล็อกครบ 3 แบบ: [เปิด 1 ห้อง] / [ปิดตาย 1 ชั้นแนวนอน] / [ปิดตาย 1 แถวแนวตั้ง] — ครบทุกคนสรุปผลทันที / หมดเวลาถือว่างดออกเสียง!`
         : room.day === 2
-          ? `เปิดหีบโหวต วันที่ 2/${room.maxDays}! ปลดล็อก [เปิด 1 ห้อง] และ [ปิดตาย 1 ชั้นแนวนอน] แล้ว! (โหวตปิดแถวแนวตั้งจะปลดล็อกในวันที่ 3)`
-          : `เปิดหีบโหวต วันที่ 1/${room.maxDays}! วันแรกโหวตได้เฉพาะ [เปิด 1 ห้อง] (หรือ Skip) — ปิดชั้นแนวนอนปลดวันที่ 2 · ปิดแถวแนวตั้งปลดวันที่ 3!`;
+          ? `เปิดหีบโหวต วันที่ 2/${room.maxDays} (เวลา 60 วินาที)! ปลดล็อก [เปิด 1 ห้อง] และ [ปิดตาย 1 ชั้นแนวนอน] แล้ว! (ปิดแถวแนวตั้งปลดวันที่ 3)`
+          : `เปิดหีบโหวต วันที่ 1/${room.maxDays} (เวลา 60 วินาที)! วันแรกโหวตได้เฉพาะ [เปิด 1 ห้อง] (หรือ Skip) — ปิดชั้นแนวนอนปลดวันที่ 2 · ปิดแถวแนวตั้งปลดวันที่ 3!`;
 
     pushChat(room, {
       senderId: 'SYSTEM',
@@ -987,7 +1017,8 @@ async function startServer() {
 
   async function submitBotRoomVote(room: GameRoom, bot: ServerPlayer): Promise<void> {
     if (!rooms.has(room.roomCode) || room.phase !== 'VOTE') return;
-    if (!bot.alive || bot.dayVote !== null || !bot.botProfile || !bot.role || !bot.room) return;
+    if (!bot.alive || bot.dayVote !== null || !isControlledByAI(bot) || !bot.role || !bot.room) return;
+    const activeProfile = ensureTakeoverProfile(bot);
 
     const unrevealedRooms = getUnrevealedRooms(room);
     if (unrevealedRooms.length === 0) return;
@@ -996,7 +1027,7 @@ async function startServer() {
     const isEvil = ROLE_DEFINITIONS[bot.role].faction === 'EVIL';
 
     const { choice, comment } = await decideBotDayVote({
-      bot: bot.botProfile,
+      bot: activeProfile,
       role: bot.role,
       myRoom: bot.room,
       day: room.day,
@@ -1021,7 +1052,13 @@ async function startServer() {
       murdererRoomIfEvil: isEvil ? murderer?.room ?? null : null,
     });
 
-    if (!rooms.has(room.roomCode) || room.phase !== 'VOTE' || !bot.alive || bot.dayVote !== null) {
+    if (
+      !rooms.has(room.roomCode) ||
+      room.phase !== 'VOTE' ||
+      !bot.alive ||
+      bot.dayVote !== null ||
+      !isControlledByAI(bot)
+    ) {
       return;
     }
 
@@ -1055,7 +1092,7 @@ async function startServer() {
 
   function accelerateBotsRoomVoteIfHumansVoted(room: GameRoom): void {
     if (room.phase !== 'VOTE') return;
-    const aliveHumans = getAlivePlayers(room).filter((p) => !p.isBot);
+    const aliveHumans = getAlivePlayers(room).filter((p) => !isControlledByAI(p));
     const allHumansVoted =
       aliveHumans.length > 0 && aliveHumans.every((h) => h.dayVote !== null);
     if (!allHumansVoted) return;

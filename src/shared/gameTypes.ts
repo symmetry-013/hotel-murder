@@ -68,8 +68,11 @@ export function getRoomsInColumn(col: HotelColumnNumber, totalFloors = 7): Hotel
   return getFloorsForCount(totalFloors).map((f) => (f * 100 + col) as HotelRoomNumber);
 }
 
-export function getMaxDaysForPlayerCount(totalPlayers: number): number {
-  return totalPlayers <= 6 ? 3 : 4;
+export const VOTE_DURATION_SECONDS = 60;
+export const NIGHT_DURATION_SECONDS = 120;
+
+export function getMaxDaysForPlayerCount(_totalPlayers: number): number {
+  return 4;
 }
 
 export type DayVoteKind = 'ROOM' | 'FLOOR' | 'COLUMN' | 'SKIP';
@@ -238,6 +241,7 @@ export interface PublicPlayer {
   id: string;
   name: string;
   isBot: boolean;
+  aiTakeover: boolean;
   isHost: boolean;
   connected: boolean;
   alive: boolean;
