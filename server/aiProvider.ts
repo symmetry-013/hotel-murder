@@ -383,6 +383,7 @@ const DEPRECATED_GROQ_MODELS = new Set([
   'llama-3.3-70b-versatile',
   'llama-3.1-8b-instant',
   'qwen/qwen3-32b',
+  'qwen/qwen3.6-27b',
   'meta-llama/llama-4-scout-17b-16e-instruct',
 ]);
 
@@ -404,7 +405,7 @@ function getGroqConfig(): { apiKey: string; models: string[] } | null {
   const primary =
     envModel && !DEPRECATED_GROQ_MODELS.has(envModel) ? envModel : 'openai/gpt-oss-20b';
   const models = Array.from(
-    new Set([primary, 'openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.6-27b'])
+    new Set([primary, 'openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.8-27b'])
   );
   return { apiKey, models };
 }
@@ -445,61 +446,86 @@ async function callGroq(
   let lastError: unknown = null;
 
   for (const modelName of cfg.models) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const body: Record<string, unknown> = {
-        model: modelName,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: expectJson ? 0.55 : 0.9,
-        max_tokens: maxTokens,
-      };
-      if (expectJson) {
-        body.response_format = { type: 'json_object' };
-      }
+    const isGptOss = modelName.startsWith('openai/gpt-oss-');
+    const isQwen38 = modelName.startsWith('qwen/qwen3.8');
+    // Groq reasoning models count reasoning tokens inside max_completion_tokens
+    const completionBudget = isGptOss ? Math.max(maxTokens * 4, 640) : Math.max(maxTokens, 256);
+    const safeSystemPrompt =
+      expectJson && !/json/i.test(systemPrompt) && !/json/i.test(userPrompt)
+        ? `${systemPrompt}\nตอบกลับเป็น JSON object เท่านั้น`
+        : systemPrompt;
 
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${cfg.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+    // Try with json_object first when expectJson=true, and retry once without response_format if 400
+    const attempts = expectJson ? [true, false] : [false];
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        const err = new Error(`GROQ_HTTP_${res.status} (${modelName}): ${errText.slice(0, 140)}`);
-        lastError = err;
-        if (res.status === 404 || res.status === 400 || res.status === 429 || res.status >= 500) {
-          console.warn(`[AI] Groq model "${modelName}" failed (${res.status}), trying next candidate...`);
+    for (const useJsonMode of attempts) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const body: Record<string, unknown> = {
+          model: modelName,
+          messages: [
+            { role: 'system', content: safeSystemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: expectJson ? 0.55 : 0.9,
+          max_completion_tokens: completionBudget,
+        };
+        if (isGptOss) {
+          body.reasoning_effort = 'low';
+        } else if (isQwen38) {
+          body.reasoning_effort = 'none';
+        }
+        if (useJsonMode) {
+          body.response_format = { type: 'json_object' };
+        }
+
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${cfg.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          const err = new Error(`GROQ_HTTP_${res.status} (${modelName}): ${errText.slice(0, 180)}`);
+          lastError = err;
+          console.warn(
+            `[AI] Groq model "${modelName}" failed (${res.status}, jsonMode=${useJsonMode}): ${errText.slice(0, 180)}`
+          );
+          if (res.status === 400 && useJsonMode) {
+            continue; // Retry same model without response_format
+          }
+          if (res.status === 404 || res.status === 400 || res.status === 429 || res.status >= 500) {
+            break; // Move to next candidate model
+          }
+          throw err;
+        }
+
+        const data = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const content = data.choices?.[0]?.message?.content?.trim();
+        if (!content) {
+          lastError = new Error(`GROQ_EMPTY_RESPONSE (${modelName})`);
           continue;
         }
-        throw err;
+        return content;
+      } catch (err) {
+        lastError = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('GROQ_HTTP_401') || msg.includes('GROQ_HTTP_403')) {
+          throw err;
+        }
+        console.warn(`[AI] Groq model "${modelName}" error (${msg.slice(0, 160)}), trying next...`);
+        break;
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const content = data.choices?.[0]?.message?.content?.trim();
-      if (!content) {
-        lastError = new Error(`GROQ_EMPTY_RESPONSE (${modelName})`);
-        continue;
-      }
-      return content;
-    } catch (err) {
-      lastError = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('GROQ_HTTP_401') || msg.includes('GROQ_HTTP_403')) {
-        throw err;
-      }
-      console.warn(`[AI] Groq model "${modelName}" error (${msg.slice(0, 120)}), trying next candidate...`);
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
