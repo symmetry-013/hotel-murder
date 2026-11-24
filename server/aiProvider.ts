@@ -379,13 +379,34 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
-function getGroqConfig(): { apiKey: string; model: string } | null {
+const DEPRECATED_GROQ_MODELS = new Set([
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'qwen/qwen3-32b',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+]);
+
+function getProviderOrder(): Array<'groq' | 'gemini'> {
+  const raw = process.env.AI_PROVIDER_ORDER?.trim() || 'groq,gemini';
+  const parsed = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is 'groq' | 'gemini' => s === 'groq' || s === 'gemini');
+  return parsed.length > 0 ? Array.from(new Set(parsed)) : ['groq', 'gemini'];
+}
+
+function getGroqConfig(): { apiKey: string; models: string[] } | null {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey || apiKey === 'YOUR_GROQ_API_KEY') {
     return null;
   }
-  const model = process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile';
-  return { apiKey, model };
+  const envModel = process.env.GROQ_MODEL?.trim();
+  const primary =
+    envModel && !DEPRECATED_GROQ_MODELS.has(envModel) ? envModel : 'openai/gpt-oss-20b';
+  const models = Array.from(
+    new Set([primary, 'openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.6-27b'])
+  );
+  return { apiKey, models };
 }
 
 function sanitizeThaiColloquial(raw: string): string {
@@ -421,47 +442,68 @@ async function callGroq(
   const cfg = getGroqConfig();
   if (!cfg) throw new Error('GROQ_NOT_CONFIGURED');
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let lastError: unknown = null;
 
-  try {
-    const body: Record<string, unknown> = {
-      model: cfg.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: expectJson ? 0.55 : 0.9,
-      max_tokens: maxTokens,
-    };
-    if (expectJson) {
-      body.response_format = { type: 'json_object' };
+  for (const modelName of cfg.models) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const body: Record<string, unknown> = {
+        model: modelName,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: expectJson ? 0.55 : 0.9,
+        max_tokens: maxTokens,
+      };
+      if (expectJson) {
+        body.response_format = { type: 'json_object' };
+      }
+
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cfg.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        const err = new Error(`GROQ_HTTP_${res.status} (${modelName}): ${errText.slice(0, 140)}`);
+        lastError = err;
+        if (res.status === 404 || res.status === 400 || res.status === 429 || res.status >= 500) {
+          console.warn(`[AI] Groq model "${modelName}" failed (${res.status}), trying next candidate...`);
+          continue;
+        }
+        throw err;
+      }
+
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = data.choices?.[0]?.message?.content?.trim();
+      if (!content) {
+        lastError = new Error(`GROQ_EMPTY_RESPONSE (${modelName})`);
+        continue;
+      }
+      return content;
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('GROQ_HTTP_401') || msg.includes('GROQ_HTTP_403')) {
+        throw err;
+      }
+      console.warn(`[AI] Groq model "${modelName}" error (${msg.slice(0, 120)}), trying next candidate...`);
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(`GROQ_HTTP_${res.status}: ${errText.slice(0, 120)}`);
-    }
-
-    const data = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content?.trim();
-    if (!content) throw new Error('GROQ_EMPTY_RESPONSE');
-    return content;
-  } finally {
-    clearTimeout(timeout);
   }
+
+  throw lastError instanceof Error ? lastError : new Error('GROQ_FAILED');
 }
 
 const GEMINI_SAFETY_NONE = [
@@ -489,11 +531,17 @@ async function callGemini(
   if (!ai) throw new Error('GEMINI_NOT_CONFIGURED');
 
   const configuredPrimary = process.env.GEMINI_MODEL_PRIMARY?.trim();
+  const configuredFast = process.env.GEMINI_MODEL_FAST?.trim();
   const baseCandidates = Array.from(
     new Set(
-      [configuredPrimary, 'gemini-4-hydrogen', 'gemini-3.1-flash-lite'].filter(
-        (m): m is string => Boolean(m)
-      )
+      [
+        configuredPrimary,
+        configuredFast,
+        'gemini-3.1-flash-lite',
+        'gemini-3.5-flash-lite',
+        'gemini-2.5-flash-lite',
+        'gemini-4-hydrogen',
+      ].filter((m): m is string => Boolean(m))
     )
   );
   const candidateModels = resolvedGeminiModel
@@ -547,6 +595,12 @@ async function callGemini(
         msg.includes('not supported') ||
         msg.includes('429') ||
         msg.includes('RESOURCE_EXHAUSTED') ||
+        msg.includes('503') ||
+        msg.includes('500') ||
+        msg.includes('504') ||
+        msg.includes('UNAVAILABLE') ||
+        msg.includes('overloaded') ||
+        msg.includes('high demand') ||
         msg.includes('GEMINI_EMPTY_RESPONSE') ||
         msg.includes('GEMINI_TIMEOUT');
       if (isModelRecoverable) {
@@ -577,30 +631,32 @@ async function callAIWithAutoFallback(
   const hasGemini = Boolean(getGeminiClient());
   const errors: string[] = [];
 
-  if (hasGroq) {
-    try {
-      const text = await callGroq(systemPrompt, userPrompt, expectJson, maxTokens, timeoutMs);
-      return { text, provider: 'groq' };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`Groq: ${msg}`);
-      console.warn(`[AI] Groq failed/429/timeout, switching to Gemini:`, msg);
-    }
-  }
+  const providerOrder = getProviderOrder();
 
-  if (hasGemini) {
-    try {
-      const text = await callGemini(
-        systemPrompt,
-        userPrompt,
-        expectJson,
-        Math.max(timeoutMs + 1000, 8500)
-      );
-      return { text, provider: 'gemini' };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`Gemini: ${msg}`);
-      console.warn(`[AI] Gemini fallback failed:`, msg);
+  for (const provider of providerOrder) {
+    if (provider === 'groq' && hasGroq) {
+      try {
+        const text = await callGroq(systemPrompt, userPrompt, expectJson, maxTokens, timeoutMs);
+        return { text, provider: 'groq' };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`Groq: ${msg}`);
+        console.warn(`[AI] Groq failed/429/timeout, trying next provider:`, msg);
+      }
+    } else if (provider === 'gemini' && hasGemini) {
+      try {
+        const text = await callGemini(
+          systemPrompt,
+          userPrompt,
+          expectJson,
+          Math.max(timeoutMs + 1000, 8500)
+        );
+        return { text, provider: 'gemini' };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`Gemini: ${msg}`);
+        console.warn(`[AI] Gemini failed, trying next provider:`, msg);
+      }
     }
   }
 
