@@ -10,12 +10,15 @@ import {
   VolumeX,
   Bot,
   UserPlus,
+  UserX,
 } from 'lucide-react';
 import type { RoomStatePayload, RoleId } from '../shared/gameTypes';
 import {
   getFloorCountForPlayerCount,
+  getInitialCrimeCountForPlayerCount,
   getMaxDaysForPlayerCount,
   getRoleDistribution,
+  PLAYER_COUNT_OPTIONS,
   ROLE_DEFINITIONS,
 } from '../shared/gameTypes';
 import { TitleLogo } from './TitleLogo';
@@ -36,6 +39,7 @@ interface LobbyViewProps {
   onJoinRoom: (roomCode: string, nickname: string) => void;
   onClearInvite: () => void;
   onUpdateMaxPlayers: (count: number) => void;
+  onKickPlayer: (targetPlayerId: string) => void;
   onStartGame: () => void;
   onLeaveRoom: () => void;
 }
@@ -54,6 +58,7 @@ export function LobbyView({
   onJoinRoom,
   onClearInvite,
   onUpdateMaxPlayers,
+  onKickPlayer,
   onStartGame,
   onLeaveRoom,
 }: LobbyViewProps) {
@@ -242,11 +247,12 @@ export function LobbyView({
                     <span>จำนวนผู้เล่นทั้งหมด (เติมบอท AI อัตโนมัติ)</span>
                     <span className="font-mono-tabular text-[#C8A25A] font-semibold">
                       {getFloorCountForPlayerCount(createMaxPlayers)} ชั้น (
-                      {getFloorCountForPlayerCount(createMaxPlayers) * 3} ห้อง) · {createMaxDays} วัน
+                      {getFloorCountForPlayerCount(createMaxPlayers) * 3} ห้อง) · ศพเริ่ม{' '}
+                      {getInitialCrimeCountForPlayerCount(createMaxPlayers)} · {createMaxDays} วัน
                     </span>
                   </div>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[5, 6, 7, 8].map((num) => (
+                  <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                    {PLAYER_COUNT_OPTIONS.map((num) => (
                       <button
                         key={num}
                         type="button"
@@ -406,7 +412,20 @@ export function LobbyView({
                       </p>
                     </div>
                   </div>
-                  {p.isHost && <Crown className="h-4 w-4 text-[#C8A25A] shrink-0" />}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {p.isHost && <Crown className="h-4 w-4 text-[#C8A25A] shrink-0" />}
+                    {isHost && !p.isHost && p.id !== myPlayerId && (
+                      <button
+                        type="button"
+                        onClick={() => onKickPlayer(p.id)}
+                        title={`เตะ ${p.name} ออกจากห้อง`}
+                        className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-[#7F1D1D] bg-[#261015] px-2.5 text-xs font-semibold text-[#FCA5A5] hover:bg-[#991B1B] hover:text-white transition-colors cursor-pointer"
+                      >
+                        <UserX className="h-3.5 w-3.5" />
+                        <span>เตะออก</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
 
@@ -433,19 +452,20 @@ export function LobbyView({
             <div>
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-display text-base font-semibold text-[#F5EFE6]">
-                  ตั้งค่าจำนวนผู้เล่น (5–8 คน)
+                  ตั้งค่าจำนวนผู้เล่น (5–12 คน)
                 </h2>
                 <span className="font-mono-tabular text-xs font-semibold text-[#E8C984]">
                   {getFloorCountForPlayerCount(roomState.maxPlayers)} ชั้น · จำกัด {maxDays} วัน
                 </span>
               </div>
               <p className="mt-1 text-xs text-[#9D948A]">
-                จำนวนชั้น = ผู้เล่น − 1 ({getFloorCountForPlayerCount(roomState.maxPlayers)} ชั้น × 3 ห้อง ={' '}
-                {getFloorCountForPlayerCount(roomState.maxPlayers) * 3} ห้อง) · เปิดศพตั้งต้น 3 ห้อง
+                {getFloorCountForPlayerCount(roomState.maxPlayers)} ชั้น × 3 ห้อง ={' '}
+                {getFloorCountForPlayerCount(roomState.maxPlayers) * 3} ห้อง · เปิดศพตั้งต้น{' '}
+                {getInitialCrimeCountForPlayerCount(roomState.maxPlayers)} ห้อง
               </p>
 
               <div className="mt-3 grid grid-cols-4 gap-2">
-                {[5, 6, 7, 8].map((num) => {
+                {PLAYER_COUNT_OPTIONS.map((num) => {
                   const disabled = !isHost || num < humanPlayers.length;
                   const active = roomState.maxPlayers === num;
                   return (
@@ -476,12 +496,12 @@ export function LobbyView({
                 บทบาทลับต้นฉบับ ({rolesPreview.length} ใบ · ไม่ซ้ำกัน)
               </p>
               <div className="space-y-1.5 text-xs">
-                {rolesPreview.map((roleId: RoleId) => {
+                {rolesPreview.map((roleId: RoleId, idx: number) => {
                   const def = ROLE_DEFINITIONS[roleId];
                   const isEvil = def.faction === 'EVIL';
                   const isSpecial = def.faction === 'SPECIAL';
                   return (
-                    <div key={roleId} className="flex items-center justify-between gap-2">
+                    <div key={`${roleId}-${idx}`} className="flex items-center justify-between gap-2">
                       <span
                         className={
                           isEvil
