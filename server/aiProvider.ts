@@ -124,6 +124,22 @@ export const BOT_PERSONAS: BotPersonaTemplate[] = [
     speechStyle: 'พูดเพี้ยนๆ ล่องลอย ชวนสับสนจนคนอื่นเดาทางไม่ถูก',
     avatarColor: '#8C6239',
   },
+  {
+    code: 'M5',
+    gender: 'M',
+    archetype: 'ชาย 5 · สายขี้แซวปั่นประสาท',
+    persona: 'ชอบจับผิดคำพูดเพื่อนแล้วล้อเลียน แกล้งโยนข้อสงสัยแบบขำๆ แต่จริงจังตอนโหวต',
+    speechStyle: 'แซวแรง กวนๆ ขี้เล่นแต่สายตาคม ใครตอบช้าโดนจี้',
+    avatarColor: '#3B7A57',
+  },
+  {
+    code: 'F5',
+    gender: 'F',
+    archetype: 'หญิง 5 · สายสืบเย็นชาจี้ตรงจุด',
+    persona: 'ใจเย็น ไม่โวยวาย แต่ไล่เช็กความสัมพันธ์ระหว่างชั้นกับแถวแบบเป๊ะๆ ใครโกหกโป๊ะแตกทันที',
+    speechStyle: 'นิ่ง สุขุม เฉียบขาด ถามย้อนจุดที่อีกฝ่ายพูดขัดกันเอง',
+    avatarColor: '#6D4C9E',
+  },
 ];
 
 const MALE_THAI_NICKNAMES = [
@@ -242,6 +258,18 @@ const PERSONA_DAY1_BANK: Record<string, string[]> = {
     'อย่ามัวแต่เถียงกันไร้สาระวันแรก รีบเคลียร์รอบแรกแล้วไปเอาข้อมูลกลางคืนมาชนกันพรุ่งนี้ดีกว่า!',
     'จำไว้นะวันแรกโหวตได้แค่รายห้อง อย่าไปเผลอหลุดชั้นตัวเองให้ฝ่ายฆาตกรรู้เด็ดขาด กดพร้อมกันเลยมั้ย?',
   ],
+  M5: [
+    'อ้าวเฮ้ย เงียบกันหมดเลยว่ะ สงสัยฆาตกรกำลังนั่งกลั้นขำอยู่หลังจอแน่ๆ ไอ้สัส!',
+    'วันแรกยังไม่มีใครสารภาพ งั้นสุ่มจิ้มห้องตัดช้อยส์ไปก่อนดิ เดี๋ยวคืนนี้ค่อยจับโป๊ะ!',
+    'ใครเงียบสุดในวงนี้กูขอเล็งไว้ก่อนเลยนะเว้ย ทรงนี้มันมีพิรุธแปลกๆ ว่ะ!',
+    'เข้าโรงแรมมาเจอศพตั้งหลายห้อง ยังนั่งชิลกันได้อีก เปิดสักห้องเลยมั้ยล่ะ!',
+  ],
+  F5: [
+    'วันแรกยังไม่มีผลสกิล ลองเปิดห้องสุ่มเพื่อลดตัวเลือกให้แม่บ้านกับพนักงานต้อนรับคืนนี้ดีกว่า',
+    'สังเกตดูนะ ใครรีบโยนประเด็นตั้งแต่วันแรกมักจะกลัวโดนเพ่งเล็ง ลองเช็กดีๆ',
+    'ยังไม่ต้องรีบเชื่อใครทั้งนั้น วันแรกตัดห้องว่างไปก่อน คืนนี้ค่อยเอาข้อมูลจริงมาชนกัน',
+    'อย่าเพิ่งโหวตมั่ว เก็บข้อมูลชั้นกับแถวไว้เทียบพรุ่งนี้จะจับฆาตกรได้ง่ายกว่า',
+  ],
   F4: [
     'เอ๊ะ โรงแรมนี้แอร์เย็นแปลกๆ นะ หรือว่าผีในห้องศพมันเดินผ่านหน้าห้องกูวะ ฮิๆ',
     'วันแรกกูยังงงอยู่เลยว่าห้องกูอยู่ฝั่งไหน แต่ถ้าพวกมึงอยากเปิดห้องไหนก็จิ้มไปเถอะ กูชิลๆ',
@@ -281,6 +309,18 @@ const PERSONA_EMERGENCY_FALLBACK_BANK: Record<string, string[]> = {
     'ตั้งสติแล้วรวมเสียงกันหน่อย ใครได้เบาะแสเมื่อคืนรีบสรุปมา เราจะได้โหวตไปทางเดียวกัน!',
     'อย่าเสียงแตกนะพวกมึง เลือกเป้าที่ชัวร์ที่สุดแล้วกดพร้อมโหวตเลย!',
   ],
+  M5: [
+    'อ้าวเฮ้ย เงียบกันหมดเลยว่ะ สงสัยฆาตกรกำลังนั่งกลั้นขำอยู่หลังจอแน่ๆ ไอ้สัส!',
+    'วันแรกยังไม่มีใครสารภาพ งั้นสุ่มจิ้มห้องตัดช้อยส์ไปก่อนดิ เดี๋ยวคืนนี้ค่อยจับโป๊ะ!',
+    'ใครเงียบสุดในวงนี้กูขอเล็งไว้ก่อนเลยนะเว้ย ทรงนี้มันมีพิรุธแปลกๆ ว่ะ!',
+    'เข้าโรงแรมมาเจอศพตั้งหลายห้อง ยังนั่งชิลกันได้อีก เปิดสักห้องเลยมั้ยล่ะ!',
+  ],
+  F5: [
+    'วันแรกยังไม่มีผลสกิล ลองเปิดห้องสุ่มเพื่อลดตัวเลือกให้แม่บ้านกับพนักงานต้อนรับคืนนี้ดีกว่า',
+    'สังเกตดูนะ ใครรีบโยนประเด็นตั้งแต่วันแรกมักจะกลัวโดนเพ่งเล็ง ลองเช็กดีๆ',
+    'ยังไม่ต้องรีบเชื่อใครทั้งนั้น วันแรกตัดห้องว่างไปก่อน คืนนี้ค่อยเอาข้อมูลจริงมาชนกัน',
+    'อย่าเพิ่งโหวตมั่ว เก็บข้อมูลชั้นกับแถวไว้เทียบพรุ่งนี้จะจับฆาตกรได้ง่ายกว่า',
+  ],
   F4: [
     'เอ๊ะ หรือว่าพวกเรากำลังโดนใครสักคนจูงจมูกอยู่กันแน่นะ กูว่ากลิ่นมันแปลกๆ ว่ะ',
     'เอาที่พวกมึงสบายใจเลยจ้า แต่ระวังหวยไปออกห้องที่คาดไม่ถึงละกันนะ~',
@@ -312,7 +352,7 @@ export function createRoundBotProfiles(
 
   const startWithMale = Math.random() < 0.5;
   const interleaved: BotPersonaTemplate[] = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     if (startWithMale) {
       if (malePersonas[i]) interleaved.push(malePersonas[i]);
       if (femalePersonas[i]) interleaved.push(femalePersonas[i]);
@@ -322,7 +362,10 @@ export function createRoundBotProfiles(
     }
   }
 
-  const chosenPersonas = interleaved.slice(0, count);
+  const chosenPersonas: BotPersonaTemplate[] = [];
+  for (let i = 0; i < count; i++) {
+    chosenPersonas.push(interleaved[i % interleaved.length]);
+  }
   const usedNamesLower = new Set<string>(Array.from(excludeHumanNames).map((n) => n.toLowerCase()));
   const prevLower = new Set<string>(Array.from(previousRoundBotNames).map((n) => n.toLowerCase()));
 
@@ -1021,6 +1064,21 @@ export async function decideBotNightAction(params: {
         }
       }
       return pool[Math.floor(Math.random() * Math.max(1, pool.length))] ?? params.unrevealedRooms[0] ?? 101;
+    }
+
+    if (params.role === 'RECEPTIONIST') {
+      const candidates = params.unrevealedRooms.filter((r) => r !== params.myRoom);
+      return candidates[Math.floor(Math.random() * candidates.length)] ?? params.unrevealedRooms[0] ?? null;
+    }
+
+    if (params.role === 'SHADOW_ASSASSIN') {
+      const activeFloors = getFloorsForCount(params.totalFloors);
+      if (Math.random() < 0.55) {
+        const f = activeFloors[Math.floor(Math.random() * activeFloors.length)] ?? 1;
+        return `FLOOR:${f}`;
+      }
+      const c = HOTEL_COLUMNS[Math.floor(Math.random() * HOTEL_COLUMNS.length)] ?? 1;
+      return `COLUMN:${c}`;
     }
 
     if (params.role === 'KEYMASTER') {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Ban,
+  Clock,
   Columns3,
   Crosshair,
   DoorClosed,
@@ -34,6 +35,7 @@ interface HotelFloorplanProps {
   phase: GamePhase;
   day: number;
   totalFloors: number;
+  secondsLeft?: number | null;
   revealedRooms: RevealedRoomInfo[];
   lockedFloors: HotelFloorNumber[];
   lockedColumns: HotelColumnNumber[];
@@ -53,6 +55,7 @@ export function HotelFloorplan({
   phase,
   day,
   totalFloors,
+  secondsLeft = null,
   revealedRooms,
   lockedFloors,
   lockedColumns,
@@ -86,6 +89,7 @@ export function HotelFloorplan({
   // Night role interaction flags
   const canMurdererPickRoom = isNight && isAlive && myRole === 'MURDERER' && !nightSubmitted;
   const canKeymasterPickRoom = isNight && isAlive && myRole === 'KEYMASTER' && !nightSubmitted;
+  const canReceptionistPickRoom = isNight && isAlive && myRole === 'RECEPTIONIST' && !nightSubmitted;
   const canHousekeeperPickFloor = isNight && isAlive && myRole === 'HOUSEKEEPER' && !nightSubmitted;
   const canWitnessPickFloor = isNight && isAlive && myRole === 'WITNESS' && !nightSubmitted;
   const canGlazierPickColumn = isNight && isAlive && myRole === 'GLAZIER' && !nightSubmitted;
@@ -99,11 +103,17 @@ export function HotelFloorplan({
   const canFloorLockdownVote = canVote && day >= 2;
   const canColumnLockdownVote = canVote && day >= 3;
   const canClickRoom =
-    canVote || canMurdererPickRoom || canKeymasterPickRoom || canAccomplicePing;
+    canVote ||
+    canMurdererPickRoom ||
+    canKeymasterPickRoom ||
+    canReceptionistPickRoom ||
+    canAccomplicePing;
 
   const myDayVote = intel?.myDayVote ?? null;
   const pingedRoom = intel?.secretPing?.kind === 'ROOM' ? intel.secretPing.room : null;
   const pingedFloor = intel?.secretPing?.kind === 'FLOOR' ? intel.secretPing.floor : null;
+  const jammedFloor = intel?.jamPing?.kind === 'FLOOR' ? intel.jamPing.floor : null;
+  const jammedColumn = intel?.jamPing?.kind === 'COLUMN' ? intel.jamPing.column : null;
   const lastLockedRoom = intel?.lastKeymasterLockedRoom ?? null;
   const [pendingKillRoom, setPendingKillRoom] = useState<HotelRoomNumber | null>(null);
 
@@ -132,6 +142,9 @@ export function HotelFloorplan({
     }
     if (canMurdererPickRoom) {
       return `ฆาตกร: มีอิสระเลือกฆ่าได้ทุกห้องที่ยังไม่ปิดทั่วทั้ง ${activeFloors.length} ชั้น (ห้ามเลือกห้องตัวเอง · ห้องคู่หูแสดงกรอบแดง)`;
+    }
+    if (canReceptionistPickRoom) {
+      return 'พนักงานต้อนรับ: แตะเลือก 1 ห้องที่ยังไม่เปิดเพื่อตรวจสอบว่า "ห้องว่าง" หรือ "มีคนพักอยู่"';
     }
     if (canKeymasterPickRoom) {
       return lastLockedRoom
@@ -167,7 +180,7 @@ export function HotelFloorplan({
   return (
     <section
       aria-label={`แผนผังโรงแรม ${activeFloors.length} ชั้น 3 แถวตั้ง`}
-      className="rounded-xl border border-[#2F262C] bg-[#141116]/95 p-3.5 sm:p-5 space-y-3"
+      className="w-full max-w-[480px] lg:max-w-none mx-auto rounded-xl border border-[#2F262C] bg-[#141116]/95 p-2.5 sm:p-5 space-y-2.5 sm:space-y-3"
     >
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#251F24] pb-3">
@@ -200,18 +213,30 @@ export function HotelFloorplan({
         </div>
       </div>
 
-      {/* 3 Vertical Column Headers (Interactive for Day 3+ VOTE Column Lockdown & NIGHT Glazier) */}
-      <div className="grid grid-cols-[78px_1fr] sm:grid-cols-[118px_1fr] gap-2 sm:gap-2.5 items-center">
-        <div className="text-[10px] sm:text-[11px] font-mono-tabular text-[#7D746D] text-center leading-tight">
-          {canVote
-            ? day >= 3
-              ? 'ปิดชั้น / แถว'
-              : day === 2
-                ? 'ปิดชั้น (วัน 2)'
-                : 'โหวตรายห้อง'
-            : 'ชั้น / แถวตั้ง'}
-        </div>
-        <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5">
+      {/* Sticky Timer + 3 Vertical Column Headers (stays visible while scrolling 8-9 floors on mobile) */}
+      <div className="sticky top-0 z-10 -mx-2.5 px-2.5 py-2 sm:-mx-5 sm:px-5 bg-[#141116]/95 backdrop-blur-md border-b border-[#251F24] space-y-1.5">
+        {secondsLeft !== null && (
+          <div className="flex items-center justify-between text-[11px] font-mono-tabular">
+            <span className="text-[#9D948A]">
+              {isVote ? 'ช่วงโหวต' : isNight ? 'ช่วงกลางคืน' : 'ช่วงกลางวัน'} · {activeFloors.length} ชั้น
+            </span>
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-bold ${
+                secondsLeft <= 10
+                  ? 'bg-[#7F1D1D] text-white animate-pulse'
+                  : 'bg-[#251D13] text-[#FDE047]'
+              }`}
+            >
+              <Clock className="h-3 w-3" />
+              <span>เหลือ {secondsLeft}s</span>
+            </span>
+          </div>
+        )}
+        <div className="grid grid-cols-[46px_1fr] sm:grid-cols-[110px_1fr] gap-1.5 sm:gap-2.5 items-center">
+          <div className="text-[10px] sm:text-[11px] font-mono-tabular text-[#9D948A] text-center leading-tight font-semibold">
+            ชั้น
+          </div>
+          <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5">
           {HOTEL_COLUMNS.map((col) => {
             const isLockedCol = lockedColumns.includes(col);
             const hasUnrevealedInCol = getRoomsInColumn(col, totalFloors).some(
@@ -308,7 +333,9 @@ export function HotelFloorplan({
         </div>
       </div>
 
-      {/* Dynamic Floor Matrix (totalPlayers - 1 floors) */}
+      </div>
+
+      {/* Dynamic Floor Matrix (4 to 9 floors, compact mobile 3-col grid) */}
       <div className="space-y-1.5 sm:space-y-2">
         {activeFloors.map((floor) => {
           const rooms = getRoomsOnFloor(floor);
@@ -321,14 +348,17 @@ export function HotelFloorplan({
             (myRole === 'HOUSEKEEPER' || myRole === 'WITNESS') &&
             intel?.selectedNightTarget === floor;
           const isFloorPinged = isNight && pingedFloor === floor;
+          const isFloorJammed = isNight && jammedFloor === floor;
 
           return (
             <div
               key={floor}
-              className={`grid grid-cols-[78px_1fr] sm:grid-cols-[118px_1fr] gap-2 sm:gap-2.5 items-stretch rounded-xl transition-all ${
+              className={`grid grid-cols-[46px_1fr] sm:grid-cols-[110px_1fr] gap-1.5 sm:gap-2.5 items-stretch rounded-xl transition-all ${
                 isFloorPinged
-                  ? 'border-2 border-[#EF4444] bg-[#3B0D14]/70 p-1.5 -mx-1.5 shadow-[0_0_24px_rgba(239,68,68,0.55)] animate-floor-target-pulse'
-                  : ''
+                  ? 'border-2 border-[#EF4444] bg-[#3B0D14]/70 p-1 -mx-1 shadow-[0_0_20px_rgba(239,68,68,0.55)] animate-floor-target-pulse'
+                  : isFloorJammed
+                    ? 'border-2 border-[#A855F7] bg-[#26113A]/75 p-1 -mx-1 shadow-[0_0_20px_rgba(168,85,247,0.55)] animate-jam-target-pulse'
+                    : ''
               }`}
             >
               {/* Left Floor Column: Night Housekeeper/Witness | Day 2+ Floor Lockdown | Day 1 Locked | Static */}
@@ -446,6 +476,7 @@ export function HotelFloorplan({
                     ((myDayVote?.kind === 'FLOOR' && myDayVote.floor === floor) ||
                       (myDayVote?.kind === 'COLUMN' && myDayVote.column === colNum));
                   const isPinged = isNight && pingedRoom === roomNum;
+                  const isColJammed = isNight && jammedColumn === colNum;
 
                   const isRepeatLockBanned =
                     canKeymasterPickRoom && lastLockedRoom === roomNum;
@@ -467,7 +498,7 @@ export function HotelFloorplan({
                       onAccomplicePingRoom(roomNum);
                     } else if (canMurdererPickRoom) {
                       setPendingKillRoom(roomNum);
-                    } else if (canKeymasterPickRoom) {
+                    } else if (canKeymasterPickRoom || canReceptionistPickRoom) {
                       onNightSelectRoom(roomNum);
                     }
                   };
@@ -515,6 +546,9 @@ export function HotelFloorplan({
                   } else if (isPinged) {
                     tileStyle =
                       'border-[#EF4444] bg-[#321016] text-[#FEE2E2] animate-signal-ring cursor-pointer';
+                  } else if (isColJammed) {
+                    tileStyle =
+                      'border-[#A855F7] bg-[#241136] text-[#F3E8FF] animate-jam-target-pulse cursor-pointer';
                   } else if (isMyRoom) {
                     tileStyle =
                       'border-[#C8A25A] bg-[#241D13] text-[#F8E7C0]' +
@@ -537,7 +571,7 @@ export function HotelFloorplan({
                       type="button"
                       disabled={isDisabledTile}
                       onClick={handleClick}
-                      className={`relative min-h-[58px] sm:min-h-[64px] flex flex-col justify-between rounded-lg border p-2 text-left transition-colors ${tileStyle}`}
+                      className={`relative min-h-[46px] sm:min-h-[64px] flex flex-col justify-between rounded-lg border p-2 text-left transition-colors ${tileStyle}`}
                       style={
                         isLockedTile
                           ? {

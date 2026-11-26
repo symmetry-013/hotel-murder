@@ -203,6 +203,18 @@ export default function App() {
       setRoomState(state);
     });
 
+    socket.on('room:kicked', (payload: { reason?: string }) => {
+      saveStoredSession(null);
+      setRoomState(null);
+      setIntel(null);
+      setMyPlayerId(null);
+      setInviteRoomCode(null);
+      setSceneQueue([]);
+      setTypingIndicator(null);
+      setErrorMessage(payload?.reason || 'คุณถูกหัวหน้าห้องเชิญออกจากห้อง');
+      window.history.replaceState({}, '', window.location.pathname);
+    });
+
     socket.on('player:intel', (data: PrivatePlayerIntel) => {
       setIntel(data);
     });
@@ -236,6 +248,11 @@ export default function App() {
     socket.on('night:pingUpdate', (ping: SecretTargetPing) => {
       soundEngine.playSecretPing();
       setIntel((prev) => (prev ? { ...prev, secretPing: ping } : prev));
+    });
+
+    socket.on('secret:jamPing', (jamPing) => {
+      soundEngine.playSecretPing();
+      setIntel((prev) => (prev ? { ...prev, jamPing } : prev));
     });
 
     socket.on('scene:trigger', (payload: SceneAnimationPayload) => {
@@ -455,6 +472,14 @@ export default function App() {
     socketRef.current?.emit('night:pingTarget', { kind: 'PLAYER', playerId });
   };
 
+  const handleShadowPingJam = (kind: 'FLOOR' | 'COLUMN', value: number) => {
+    soundEngine.playSecretPing();
+    socketRef.current?.emit(
+      'night:pingJam',
+      kind === 'FLOOR' ? { kind: 'FLOOR', floor: value } : { kind: 'COLUMN', column: value }
+    );
+  };
+
   // Pre-game / Lobby View
   if (!roomState || roomState.phase === 'LOBBY') {
     return (
@@ -477,6 +502,10 @@ export default function App() {
         onUpdateMaxPlayers={(count) => {
           soundEngine.playClick();
           socketRef.current?.emit('room:updateConfig', { maxPlayers: count });
+        }}
+        onKickPlayer={(targetPlayerId) => {
+          soundEngine.playClick();
+          socketRef.current?.emit('room:kickPlayer', { targetPlayerId });
         }}
         onStartGame={() => {
           soundEngine.playClick();
@@ -732,6 +761,8 @@ export default function App() {
         onPingFloor={handleAccomplicePingFloor}
         onPingPlayer={handleAccomplicePingPlayer}
         onInspectPlayer={handleNightAction}
+        onPingJam={handleShadowPingJam}
+        onShadowJamAction={handleNightAction}
       />
     ) : null;
 
@@ -945,9 +976,23 @@ export default function App() {
               ? 'กดพร้อมครบ 100% เพื่อเข้าช่วงโหวตห้อง หรือ ปิดตายทั้งชั้น (วันที่ 2)'
               : 'กดพร้อมครบ 100% เพื่อเข้าช่วงโหวตเปิดห้อง (วันที่ 1)'}
         </span>
-        <span className="font-mono-tabular font-semibold text-[#34D399]">
-          พร้อมโหวต {roomState.readyCount}/{roomState.aliveCount} คน
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          {secondsLeft !== null && (
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono-tabular text-[11px] font-bold ${
+                secondsLeft <= 10
+                  ? 'border-[#EF4444] bg-[#7F1D1D] text-white animate-pulse'
+                  : 'border-[#C8A25A]/60 bg-[#281E12] text-[#FDE047]'
+              }`}
+            >
+              <Clock className="h-3 w-3" />
+              <span>{secondsLeft}s</span>
+            </span>
+          )}
+          <span className="font-mono-tabular font-semibold text-[#34D399]">
+            พร้อมโหวต {roomState.readyCount}/{roomState.aliveCount} คน
+          </span>
+        </div>
       </div>
 
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#262026]">
@@ -1186,6 +1231,7 @@ export default function App() {
             phase={roomState.phase}
             day={roomState.day}
             totalFloors={totalFloors}
+            secondsLeft={secondsLeft}
             revealedRooms={roomState.revealedRooms}
             lockedFloors={roomState.lockedFloors}
             lockedColumns={roomState.lockedColumns}

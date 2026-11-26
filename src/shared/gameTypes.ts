@@ -6,7 +6,9 @@ export type RoleId =
   | 'WITNESS'
   | 'MURDERER'
   | 'ACCOMPLICE'
-  | 'DRUNK';
+  | 'DRUNK'
+  | 'RECEPTIONIST'
+  | 'SHADOW_ASSASSIN';
 
 export type Faction = 'GOOD' | 'EVIL' | 'SPECIAL';
 
@@ -21,7 +23,7 @@ export type GamePhase =
 
 export type DeathCause = 'MURDERED' | 'LYNCHED' | null;
 
-export const HOTEL_FLOORS = [7, 6, 5, 4, 3, 2, 1] as const;
+export const HOTEL_FLOORS = [9, 8, 7, 6, 5, 4, 3, 2, 1] as const;
 export type HotelFloorNumber = (typeof HOTEL_FLOORS)[number];
 
 export const HOTEL_COLUMNS = [1, 2, 3] as const;
@@ -35,8 +37,13 @@ export const HOTEL_ROOMS = [
   501, 502, 503,
   601, 602, 603,
   701, 702, 703,
+  801, 802, 803,
+  901, 902, 903,
 ] as const;
 export type HotelRoomNumber = (typeof HOTEL_ROOMS)[number];
+
+export const PLAYER_COUNT_OPTIONS = [5, 6, 7, 8, 9, 10] as const;
+export const MAX_PLAYERS_LIMIT = 10;
 
 export function getFloorOfRoom(room: number): HotelFloorNumber {
   return Math.floor(room / 100) as HotelFloorNumber;
@@ -51,23 +58,32 @@ export function getRoomsOnFloor(floor: HotelFloorNumber): HotelRoomNumber[] {
 }
 
 export function getFloorCountForPlayerCount(totalPlayers: number): number {
+  if (totalPlayers >= 10) return 9; // 10 คน -> 9 ชั้น, 12 คน -> 9 ชั้น
+  if (totalPlayers === 9) return 8; // 9 คน -> 8 ชั้น
   return Math.max(4, Math.min(7, totalPlayers - 1));
 }
 
+export function getInitialCrimeCountForPlayerCount(totalPlayers: number): number {
+  if (totalPlayers >= 10) return 5; // 10 คน -> 9 ชั้น / ศพตั้งต้น 5 ห้อง
+  if (totalPlayers === 9) return 4; // 9 คน -> 8 ชั้น / ศพตั้งต้น 4 ห้อง
+  return 3; // 5-8 คน -> 4-7 ชั้น / ศพตั้งต้น 3 ห้อง
+}
+
 export function getFloorsForCount(totalFloors: number): HotelFloorNumber[] {
-  const clamped = Math.max(4, Math.min(7, totalFloors));
+  const clamped = Math.max(4, Math.min(9, totalFloors));
   return HOTEL_FLOORS.filter((f) => f <= clamped);
 }
 
 export function getRoomsForFloorCount(totalFloors: number): HotelRoomNumber[] {
-  const clamped = Math.max(4, Math.min(7, totalFloors));
+  const clamped = Math.max(4, Math.min(9, totalFloors));
   return HOTEL_ROOMS.filter((r) => getFloorOfRoom(r) <= clamped);
 }
 
-export function getRoomsInColumn(col: HotelColumnNumber, totalFloors = 7): HotelRoomNumber[] {
+export function getRoomsInColumn(col: HotelColumnNumber, totalFloors = 9): HotelRoomNumber[] {
   return getFloorsForCount(totalFloors).map((f) => (f * 100 + col) as HotelRoomNumber);
 }
 
+export const DAY_READY_DURATION_SECONDS = 60;
 export const VOTE_DURATION_SECONDS = 60;
 export const NIGHT_DURATION_SECONDS = 120;
 
@@ -106,7 +122,7 @@ export interface RoleDefinition {
   shortAbilityTh: string;
   detailTh: string;
   hasNightAction: boolean;
-  nightTargetType: 'ROOM' | 'FLOOR' | 'COLUMN' | 'PLAYER' | 'NONE';
+  nightTargetType: 'ROOM' | 'FLOOR' | 'COLUMN' | 'PLAYER' | 'FLOOR_OR_COLUMN' | 'NONE';
 }
 
 export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
@@ -198,10 +214,32 @@ export const ROLE_DEFINITIONS: Record<RoleId, RoleDefinition> = {
     hasNightAction: false,
     nightTargetType: 'NONE',
   },
+  RECEPTIONIST: {
+    id: 'RECEPTIONIST',
+    nameTh: 'พนักงานต้อนรับ',
+    nameEn: 'Receptionist',
+    faction: 'GOOD',
+    shortAbilityTh: 'กลางคืนตรวจ 1 ห้องพักที่ยังไม่เปิด เพื่อรู้ว่าเป็น "ห้องว่าง" หรือ "มีคนพักอยู่"',
+    detailTh:
+      'ฝ่ายผู้บริสุทธิ์ — ช่วงกลางคืนเลือกตรวจสอบ 1 ห้องพักที่ยังไม่เปิด ระบบจะแจ้งผลลับเฉพาะคุณว่าห้องนั้นเป็น "ห้องว่าง (Empty)" หรือ "มีคนพักอยู่ (Occupied)" (ไม่ระบุชื่อและบทบาท) แล้วบันทึกลงสมุดบันทึกทันที',
+    hasNightAction: true,
+    nightTargetType: 'ROOM',
+  },
+  SHADOW_ASSASSIN: {
+    id: 'SHADOW_ASSASSIN',
+    nameTh: 'นักฆ่าเงา',
+    nameEn: 'Shadow Assassin',
+    faction: 'EVIL',
+    shortAbilityTh: 'ทีมฆาตกร 3 คน: ก่อกวน 1 ชั้นหรือ 1 แถวให้แม่บ้าน/ช่างกระจกได้เลขเพี้ยน ±1 (ใช้ได้ 2 ครั้ง/เกม)',
+    detailTh:
+      'ฝ่ายฆาตกร — เห็นตัวตนและเข้าแชทลับทีมฆาตกรร่วมกับฆาตกรและผู้ช่วยได้ทั้ง 3 คน ช่วงกลางคืนเลือก "ก่อกวน 1 ชั้น หรือ 1 แถว" ทำให้ข้อมูลของแม่บ้านหรือช่างเช็ดกระจกในคืนนั้นคลาดเคลื่อน (+1 หรือ -1) ใช้ได้สูงสุด 2 ครั้งต่อเกม พร้อมปุ่มส่งซิกพื้นที่ก่อกวนสีม่วง!',
+    hasNightAction: true,
+    nightTargetType: 'FLOOR_OR_COLUMN',
+  },
 };
 
 export function getRoleDistribution(totalPlayers: number): RoleId[] {
-  const clamped = Math.max(5, Math.min(8, totalPlayers));
+  const clamped = Math.max(5, Math.min(MAX_PLAYERS_LIMIT, totalPlayers));
   const ordered: RoleId[] = [
     'MURDERER',
     'KEYMASTER',
@@ -211,6 +249,8 @@ export function getRoleDistribution(totalPlayers: number): RoleId[] {
     'ACCOMPLICE',
     'WITNESS',
     'DRUNK',
+    'RECEPTIONIST',    // บทบาทที่ 9 (ฝ่ายผู้บริสุทธิ์)
+    'SHADOW_ASSASSIN', // บทบาทที่ 10 (ฝ่ายฆาตกร)
   ];
   return ordered.slice(0, clamped);
 }
@@ -260,6 +300,7 @@ export interface SecretChatMessage {
   id: string;
   senderId: string;
   senderName: string;
+  senderRole?: RoleId;
   isBot: boolean;
   text: string;
   timestamp: number;
@@ -275,6 +316,14 @@ export interface SecretTargetPing {
   timestamp: number;
 }
 
+export interface SecretJamPing {
+  senderName: string;
+  kind: 'FLOOR' | 'COLUMN';
+  floor: HotelFloorNumber | null;
+  column: HotelColumnNumber | null;
+  timestamp: number;
+}
+
 export interface PrivateClueLog {
   id: string;
   night: number;
@@ -285,7 +334,9 @@ export interface PrivateClueLog {
     | 'WITNESS'
     | 'ACCOMPLICE'
     | 'KEYMASTER'
-    | 'MURDERER';
+    | 'MURDERER'
+    | 'RECEPTIONIST'
+    | 'SHADOW_ASSASSIN';
   title: string;
   detail: string;
   tone?: 'DANGER' | 'SAFE' | 'INFO';
@@ -314,6 +365,8 @@ export interface PrivatePlayerIntel {
   myDayVote: DayVoteChoice | null;
   secretChat: SecretChatMessage[];
   secretPing: SecretTargetPing | null;
+  jamPing: SecretJamPing | null;
+  shadowJamUsesRemaining: number;
   clueLogs: PrivateClueLog[];
 }
 

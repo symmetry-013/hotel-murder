@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Crosshair, Layers, Radio, Send, Skull } from 'lucide-react';
 import type {
+  HotelColumnNumber,
   HotelFloorNumber,
   PrivatePlayerIntel,
   PublicPlayer,
+  RoleId,
 } from '../shared/gameTypes';
-import { getFloorsForCount, ROLE_DEFINITIONS } from '../shared/gameTypes';
+import { getFloorsForCount, HOTEL_COLUMNS, ROLE_DEFINITIONS } from '../shared/gameTypes';
 
 interface SecretKillerCommsProps {
   intel: PrivatePlayerIntel;
@@ -18,6 +20,15 @@ interface SecretKillerCommsProps {
   onPingFloor: (floor: HotelFloorNumber) => void;
   onPingPlayer: (playerId: string) => void;
   onInspectPlayer?: (playerId: string) => void;
+  onPingJam?: (kind: 'FLOOR' | 'COLUMN', value: number) => void;
+  onShadowJamAction?: (target: string) => void;
+}
+
+function getEvilRoleBadge(role?: RoleId): string {
+  if (role === 'MURDERER') return '[ฆาตกร]';
+  if (role === 'ACCOMPLICE') return '[ผู้ช่วย]';
+  if (role === 'SHADOW_ASSASSIN') return '[นักฆ่าเงา]';
+  return '';
 }
 
 export function SecretKillerComms({
@@ -31,6 +42,8 @@ export function SecretKillerComms({
   onPingFloor,
   onPingPlayer,
   onInspectPlayer,
+  onPingJam,
+  onShadowJamAction,
 }: SecretKillerCommsProps) {
   const [text, setText] = useState('');
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -40,6 +53,8 @@ export function SecretKillerComms({
   }, [intel.secretChat.length]);
 
   const isAccomplice = intel.role === 'ACCOMPLICE';
+  const isShadow = intel.role === 'SHADOW_ASSASSIN';
+  const jamPing = intel.jamPing;
   const partnerDesc =
     intel.evilPartners
       .map(
@@ -82,7 +97,7 @@ export function SecretKillerComms({
       </div>
 
       {/* Murderer Complete Targeting Freedom Note */}
-      {!isAccomplice && (
+      {intel.role === 'MURDERER' && (
         <p className="text-xs text-[#F5C6CB] rounded-lg border border-[#4D1A22] bg-[#150A0E] px-3 py-2">
           ฆาตกรมีอิสระเต็มที่ในการจิ้มฆ่า{' '}
           <strong className="text-[#FDE047]">ทุกห้องที่ยังไม่ปิดทั่วทั้ง {totalFloors} ชั้น</strong>{' '}
@@ -95,6 +110,99 @@ export function SecretKillerComms({
         <div className="rounded-lg border border-[#9E2A37] bg-[#2D1017] px-3 py-2.5 text-xs text-[#FFE4E6] space-y-1">
           <p className="font-semibold text-[#FDE047]">{latestAccompliceClue.title}</p>
           <p>{latestAccompliceClue.detail}</p>
+        </div>
+      )}
+
+      {/* Live Purple Jamming Signal Banner (Shadow Assassin) */}
+      {jamPing && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-[#A855F7] bg-[#241036] px-3.5 py-2.5 text-xs sm:text-sm text-[#F3E8FF] animate-jam-target-pulse">
+          <Radio className="h-4 w-4 shrink-0 text-[#C084FC]" />
+          <p className="font-semibold">
+            {jamPing.senderName} [นักฆ่าเงา] ส่งซิกพื้นที่ก่อกวน:{' '}
+            <span className="text-[#E9D5FF] font-mono-tabular">
+              {jamPing.kind === 'FLOOR'
+                ? `ชั้น ${jamPing.floor} (ข้อมูลแม่บ้านเพี้ยน ±1)`
+                : `แถวแนวตั้ง ${jamPing.column} (ข้อมูลช่างกระจกเพี้ยน ±1)`}
+            </span>
+          </p>
+        </div>
+      )}
+
+      {/* Shadow Assassin Jamming Skill & Purple Ping Controls */}
+      {isShadow && (
+        <div className="rounded-xl border border-[#7E22CE] bg-[#190D24] p-3.5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs sm:text-sm font-bold text-[#E9D5FF]">
+              สกิลนักฆ่าเงา · ก่อกวน & ส่งซิกพื้นที่ก่อกวน (สีม่วง)
+            </span>
+            <span className="rounded-full border border-[#A855F7]/60 bg-[#2E1065] px-2.5 py-0.5 font-mono-tabular text-[11px] font-semibold text-[#E9D5FF]">
+              เหลือ {intel.shadowJamUsesRemaining}/2 ครั้ง
+            </span>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-[#D8B4FE]">ก่อกวนชั้นแนวนอน (ปั่นข้อมูลแม่บ้าน ±1):</p>
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+              {activeFloorsAsc.map((floor) => {
+                const isJamActive = jamPing?.kind === 'FLOOR' && jamPing.floor === floor;
+                return (
+                  <button
+                    key={floor}
+                    type="button"
+                    disabled={intel.nightActionSubmitted || intel.shadowJamUsesRemaining <= 0}
+                    onClick={() => {
+                      onPingJam?.('FLOOR', floor);
+                      onShadowJamAction?.(`FLOOR:${floor}`);
+                    }}
+                    className={`min-h-[42px] rounded-lg border font-mono-tabular text-xs font-bold transition-all ${
+                      isJamActive
+                        ? 'border-[#C084FC] bg-[#581C87] text-white animate-jam-target-pulse'
+                        : 'border-[#581C87] bg-[#231133] text-[#E9D5FF] hover:border-[#A855F7]'
+                    } ${intel.nightActionSubmitted || intel.shadowJamUsesRemaining <= 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  >
+                    ป่วนชั้น {floor}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-[#D8B4FE]">ก่อกวนแถวแนวตั้ง (ปั่นข้อมูลช่างเช็ดกระจก ±1):</p>
+            <div className="grid grid-cols-3 gap-2">
+              {HOTEL_COLUMNS.map((col: HotelColumnNumber) => {
+                const isJamActive = jamPing?.kind === 'COLUMN' && jamPing.column === col;
+                return (
+                  <button
+                    key={col}
+                    type="button"
+                    disabled={intel.nightActionSubmitted || intel.shadowJamUsesRemaining <= 0}
+                    onClick={() => {
+                      onPingJam?.('COLUMN', col);
+                      onShadowJamAction?.(`COLUMN:${col}`);
+                    }}
+                    className={`min-h-[42px] rounded-lg border font-mono-tabular text-xs font-bold transition-all ${
+                      isJamActive
+                        ? 'border-[#C084FC] bg-[#581C87] text-white animate-jam-target-pulse'
+                        : 'border-[#581C87] bg-[#231133] text-[#E9D5FF] hover:border-[#A855F7]'
+                    } ${intel.nightActionSubmitted || intel.shadowJamUsesRemaining <= 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  >
+                    ป่วนแถว {col} (x0{col})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {!intel.nightActionSubmitted && intel.shadowJamUsesRemaining > 0 && (
+            <button
+              type="button"
+              onClick={() => onShadowJamAction?.('SKIP')}
+              className="w-full min-h-[38px] rounded-lg border border-[#4C1D95] bg-[#140A1E] text-xs font-semibold text-[#C4B5FD] hover:border-[#A855F7] cursor-pointer"
+            >
+              ยังไม่ใช้คลื่นรบกวนคืนนี้ (เก็บสิทธิ์ไว้)
+            </button>
+          )}
         </div>
       )}
 
@@ -240,7 +348,12 @@ export function SecretKillerComms({
             const mine = m.senderId === myPlayerId;
             return (
               <div key={m.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                <span className="text-[10px] text-[#C88D95] px-1 mb-0.5">{m.senderName}</span>
+                <span className="text-[10px] text-[#C88D95] px-1 mb-0.5">
+                  {m.senderName}{' '}
+                  {m.senderRole && (
+                    <span className="font-bold text-[#FDE047]">{getEvilRoleBadge(m.senderRole)}</span>
+                  )}
+                </span>
                 <div
                   className={`max-w-[88%] rounded-lg px-3 py-1.5 text-xs sm:text-sm ${
                     mine

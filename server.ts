@@ -25,6 +25,7 @@ import type {
   RoomStatePayload,
   SceneAnimationPayload,
   SecretChatMessage,
+  SecretJamPing,
   SecretTargetPing,
   VoteResolution,
 } from './src/shared/gameTypes.ts';
@@ -34,12 +35,14 @@ import {
   getFloorCountForPlayerCount,
   getFloorOfRoom,
   getFloorsForCount,
+  getInitialCrimeCountForPlayerCount,
   getMaxDaysForPlayerCount,
   getRoleDistribution,
   getRoomsForFloorCount,
   getRoomsInColumn,
   getRoomsOnFloor,
   HOTEL_COLUMNS,
+  MAX_PLAYERS_LIMIT,
   ROLE_DEFINITIONS,
   serializeDayVote,
 } from './src/shared/gameTypes.ts';
@@ -66,6 +69,7 @@ const PORT = Number(process.env.PORT || 3000);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 const SETUP_DURATION_MS = 4000;
+const DAY_READY_DURATION_MS = 60000; // Exact 60 seconds (1 minute) ready-to-vote timer
 const VOTE_DURATION_MS = 60000; // Exact 60 seconds (1 minute) voting timer
 const VOTE_RESULT_DURATION_MS = 5000;
 const NIGHT_DURATION_MS = 120000; // Exact 120 seconds (2 minutes) night skill timer
@@ -80,6 +84,10 @@ const HUMAN_AVATAR_COLORS = [
   '#C47D3B',
   '#3F888F',
   '#8A5A44',
+  '#6E56CF',
+  '#B45309',
+  '#0F766E',
+  '#BE185D',
 ];
 
 interface ServerPlayer {
@@ -104,6 +112,7 @@ interface ServerPlayer {
   botProfile?: BotProfile;
   clueLogs: PrivateClueLog[];
   checkedPlayerIds: string[];
+  shadowJamUses: number;
 }
 
 interface NightResolvedOutcome {
@@ -122,6 +131,10 @@ interface NightSubmissions {
   detectiveTargetId: string | null;
   accompliceTargetId: string | null;
   witnessWatchFloor: HotelFloorNumber | null;
+  receptionistRoom: HotelRoomNumber | null;
+  shadowJamKind: 'FLOOR' | 'COLUMN' | null;
+  shadowJamTarget: number | null;
+  evilBotChatSentIds: Set<string>;
   submittedPlayerIds: Set<string>;
   acknowledgedPlayerIds: Set<string>;
   tonightResultsByPlayerId: Map<string, PrivateClueLog>;
@@ -144,6 +157,7 @@ interface GameRoom {
   chat: ChatMessage[];
   secretChat: SecretChatMessage[];
   secretPing: SecretTargetPing | null;
+  jamPing: SecretJamPing | null;
   historyLog: string[];
   pastVoteRecords: PastVoteRecord[];
   morningReport: MorningReport | null;
@@ -224,6 +238,10 @@ function freshNightSubmissions(deadlineAt: number | null = null): NightSubmissio
     detectiveTargetId: null,
     accompliceTargetId: null,
     witnessWatchFloor: null,
+    receptionistRoom: null,
+    shadowJamKind: null,
+    shadowJamTarget: null,
+    evilBotChatSentIds: new Set(),
     submittedPlayerIds: new Set<string>(),
     acknowledgedPlayerIds: new Set<string>(),
     tonightResultsByPlayerId: new Map<string, PrivateClueLog>(),
@@ -291,9 +309,11 @@ function getVotableColumns(room: GameRoom): HotelColumnNumber[] {
 }
 
 function getRequiredNightActors(room: GameRoom): ServerPlayer[] {
-  return getAlivePlayers(room).filter(
-    (p) => p.role !== null && ROLE_DEFINITIONS[p.role].hasNightAction
-  );
+  return getAlivePlayers(room).filter((p) => {
+    if (!p.role || !ROLE_DEFINITIONS[p.role].hasNightAction) return false;
+    if (p.role === 'SHADOW_ASSASSIN' && p.shadowJamUses >= 2) return false;
+    return true;
+  });
 }
 
 function getRequiredHumanAckActors(room: GameRoom): ServerPlayer[] {
@@ -455,6 +475,10 @@ function buildPrivateIntel(room: GameRoom, player: ServerPlayer): PrivatePlayerI
     if (role === 'DETECTIVE') selectedNightTarget = room.night.detectiveTargetId;
     if (role === 'ACCOMPLICE') selectedNightTarget = room.night.accompliceTargetId;
     if (role === 'WITNESS') selectedNightTarget = room.night.witnessWatchFloor;
+    if (role === 'RECEPTIONIST') selectedNightTarget = room.night.receptionistRoom;
+    if (role === 'SHADOW_ASSASSIN' && room.night.shadowJamKind && room.night.shadowJamTarget) {
+      selectedNightTarget = `${room.night.shadowJamKind}:${room.night.shadowJamTarget}`;
+    }
   }
 
   return {
@@ -474,6 +498,8 @@ function buildPrivateIntel(room: GameRoom, player: ServerPlayer): PrivatePlayerI
     myDayVote: player.dayVote,
     secretChat: isEvil ? room.secretChat.slice(-40) : [],
     secretPing: isEvil && room.phase === 'NIGHT' ? room.secretPing : null,
+    jamPing: isEvil && room.phase === 'NIGHT' ? room.jamPing : null,
+    shadowJamUsesRemaining: role === 'SHADOW_ASSASSIN' ? Math.max(0, 2 - player.shadowJamUses) : 0,
     clueLogs: player.clueLogs.slice(-30),
   };
 }
@@ -553,6 +579,7 @@ async function startServer() {
       id: uid('smsg'),
       senderId: sender.id,
       senderName: sender.name,
+      senderRole: sender.role ?? undefined,
       isBot: sender.isBot,
       text,
       timestamp: Date.now(),
@@ -575,6 +602,16 @@ async function startServer() {
         io.to(p.socketId).emit('night:pingUpdate', ping);
       }
     }
+  }
+
+  function broadcastJamPing(room: GameRoom, ping: SecretJamPing): void {
+    room.jamPing = ping;
+    for (const p of room.players.values()) {
+      if (p.socketId && p.connected && p.role && ROLE_DEFINITIONS[p.role].faction === 'EVIL') {
+        io.to(p.socketId).emit('secret:jamPing', ping);
+      }
+    }
+    broadcastRoomState(room);
   }
 
   function checkStandardWinCondition(
@@ -852,9 +889,10 @@ async function startServer() {
     clearRoomTimers(room);
     resetBotChatQueue(room);
     room.phase = 'DAY';
-    room.phaseEndsAt = null;
+    room.phaseEndsAt = Date.now() + DAY_READY_DURATION_MS;
     room.voteResolution = null;
     room.secretPing = null;
+    room.jamPing = null;
     room.botChatterCountThisPhase = 0;
 
     for (const p of room.players.values()) {
@@ -863,17 +901,17 @@ async function startServer() {
     }
 
     if (room.day === 1) {
-      const initialList = Array.from(room.revealedRooms.values())
+      const initialCrimeArr = Array.from(room.revealedRooms.values())
         .filter((r) => r.kind === 'INITIAL_CRIME')
         .map((r) => r.room)
-        .sort((a, b) => a - b)
-        .join(', ');
+        .sort((a, b) => a - b);
+      const initialList = initialCrimeArr.join(', ');
       pushChat(room, {
         senderId: 'SYSTEM',
         senderName: 'โรงแรมมรณะ',
         isSystem: true,
         isBot: false,
-        text: `เข้าสู่วันที่ 1/${room.maxDays} (โรงแรม ${room.totalFloors} ชั้น × 3 ห้อง) — พบศพตั้งต้นในห้องว่าง 3 ห้อง (${initialList})! วันแรกโหวตได้เฉพาะ "เปิดรายห้อง" · ปิดชั้นปลดวันที่ 2 · ปิดแถวแนวตั้งปลดวันที่ 3!`,
+        text: `เข้าสู่วันที่ 1/${room.maxDays} (โรงแรม ${room.totalFloors} ชั้น × 3 ห้อง) — พบศพตั้งต้นในห้องว่าง ${initialCrimeArr.length} ห้อง (${initialList})! กด "พร้อมโหวต" ภายใน 1 นาที (หมดเวลาเข้าสู่ช่วงโหวตอัตโนมัติ)`,
         kind: 'ALERT',
       });
     } else if (room.morningReport) {
@@ -910,9 +948,9 @@ async function startServer() {
       );
     }
 
-    // Staggered bot Ready checks (18–32s) preserving 100% mutual Ready system
+    // Staggered bot Ready checks (14–28s)
     aliveBots.forEach((bot, idx) => {
-      const readyDelay = 18000 + idx * 2400 + Math.floor(Math.random() * 2000);
+      const readyDelay = 14000 + idx * 1800 + Math.floor(Math.random() * 1800);
       scheduleRoomTimer(
         room,
         () => {
@@ -924,6 +962,25 @@ async function startServer() {
         readyDelay
       );
     });
+
+    // 60-Second Ready-to-Vote Hard Limit (prevents stalling when someone forgets to click Ready)
+    scheduleRoomTimer(
+      room,
+      () => {
+        if (room.phase === 'DAY') {
+          pushChat(room, {
+            senderId: 'SYSTEM',
+            senderName: 'โรงแรมมรณะ',
+            isSystem: true,
+            isBot: false,
+            text: 'หมดเวลากดพร้อมโหวต 1 นาทีแล้ว — ระบบเปิดหีบโหวตอัตโนมัติทันที!',
+            kind: 'VOTE',
+          });
+          startRoomVotePhase(room);
+        }
+      },
+      DAY_READY_DURATION_MS
+    );
   }
 
   /**
@@ -1438,6 +1495,7 @@ async function startServer() {
     room.phaseEndsAt = Date.now() + NIGHT_DURATION_MS;
     room.night = freshNightSubmissions();
     room.secretPing = null;
+    room.jamPing = null;
 
     pushChat(room, {
       senderId: 'SYSTEM',
@@ -1514,57 +1572,61 @@ async function startServer() {
       );
     });
 
-    // AI Accomplice sends Secret Killer Chat whisper & Target Ping after instant floor inspection
+    // Token-saving Evil Team Bot Coordination (max 1 concise bank message per bot, spaced 3s apart)
     const aliveAccomplice = getAlivePlayers(room).find((p) => p.role === 'ACCOMPLICE');
-    const aliveMurderer = getAlivePlayers(room).find((p) => p.role === 'MURDERER');
-    if (
-      aliveAccomplice &&
-      isControlledByAI(aliveAccomplice) &&
-      aliveAccomplice.room &&
-      aliveMurderer
-    ) {
+    const aliveShadow = getAlivePlayers(room).find((p) => p.role === 'SHADOW_ASSASSIN');
+    if (aliveAccomplice && isControlledByAI(aliveAccomplice)) {
       scheduleRoomTimer(
         room,
         () => {
-          void (async () => {
-            if (
-              room.phase !== 'NIGHT' ||
-              room.night.stage !== 'ACTION' ||
-              !aliveAccomplice.alive ||
-              !isControlledByAI(aliveAccomplice) ||
-              !aliveAccomplice.room
-            )
-              return;
-            const accompliceProfile = ensureTakeoverProfile(aliveAccomplice);
-            const res = await generateAccompliceSecretPing({
-              bot: accompliceProfile,
-              murdererName: aliveMurderer.name,
-              murdererRoom: aliveMurderer.room,
-              day: room.day,
-              totalFloors: room.totalFloors,
-              unrevealedRooms: getUnrevealedRooms(room),
-              myRoom: aliveAccomplice.room,
-              players: toFogBotContextPlayers(room),
-              pastVoteRecords: room.pastVoteRecords,
-              recentChat: room.chat.slice(-15),
-              privateClues: aliveAccomplice.clueLogs,
-            });
-            if (room.phase !== 'NIGHT' || !aliveAccomplice.alive) return;
-            if (res.whisper) {
-              pushSecretEvilChat(room, aliveAccomplice, res.whisper);
-            }
-            broadcastSecretPing(room, {
-              senderName: aliveAccomplice.name,
-              kind: res.pingFloor ? 'FLOOR' : 'ROOM',
-              room: res.pingFloor ? null : res.pingRoom,
-              floor: res.pingFloor ?? null,
-              playerId: null,
-              playerName: null,
-              timestamp: Date.now(),
-            });
-          })();
+          if (room.phase !== 'NIGHT' || !aliveAccomplice.alive) return;
+          if (room.night.evilBotChatSentIds.has(aliveAccomplice.id)) return;
+          const latestClue = [...aliveAccomplice.clueLogs]
+            .reverse()
+            .find((c) => c.category === 'ACCOMPLICE');
+          const floorMatch = latestClue?.title.match(/ชั้น\s*(\d+)/);
+          const pingFloor = (
+            floorMatch
+              ? Number(floorMatch[1])
+              : getActiveFloors(room)[Math.floor(Math.random() * getActiveFloors(room).length)]
+          ) as HotelFloorNumber;
+          room.night.evilBotChatSentIds.add(aliveAccomplice.id);
+          pushSecretEvilChat(
+            room,
+            aliveAccomplice,
+            `กูส่องเจอคนอยู่ชั้น ${pingFloor} ว่ะ มึงจัดเลย!`
+          );
+          broadcastSecretPing(room, {
+            senderName: aliveAccomplice.name,
+            kind: 'FLOOR',
+            room: null,
+            floor: pingFloor,
+            playerId: null,
+            playerName: null,
+            timestamp: Date.now(),
+          });
         },
-        3400
+        3000
+      );
+    }
+    if (aliveShadow && isControlledByAI(aliveShadow) && aliveShadow.shadowJamUses < 2) {
+      scheduleRoomTimer(
+        room,
+        () => {
+          if (room.phase !== 'NIGHT' || !aliveShadow.alive) return;
+          if (room.night.evilBotChatSentIds.has(aliveShadow.id)) return;
+          const jamKind = room.night.shadowJamKind ?? 'COLUMN';
+          const jamVal = room.night.shadowJamTarget ?? 2;
+          room.night.evilBotChatSentIds.add(aliveShadow.id);
+          pushSecretEvilChat(
+            room,
+            aliveShadow,
+            jamKind === 'FLOOR'
+              ? `เดี๋ยวกูป่วนชั้น ${jamVal} ให้ คืนนี้แม่บ้านส่องมั่วแน่นอน`
+              : `เดี๋ยวกูป่วนแถว ${jamVal} ให้ คืนนี้คนดีส่องมั่วแน่นอน`
+          );
+        },
+        6000
       );
     }
 
@@ -1660,6 +1722,92 @@ async function startServer() {
         room.historyLog.push(
           `คืน ${room.day}: นักสืบ (${player.name}) สืบพบว่า ${targetPlayer.name} พักอยู่ที่ชั้น ${floor}`
         );
+      }
+    } else if (player.role === 'RECEPTIONIST') {
+      const roomNum = Number(target) as HotelRoomNumber;
+      if (!activeRooms.includes(roomNum) || room.revealedRooms.has(roomNum) || roomNum === player.room) {
+        return false;
+      }
+      room.night.receptionistRoom = roomNum;
+      const isOccupied = getAlivePlayers(room).some((p) => p.room === roomNum);
+      const clue: PrivateClueLog = {
+        id: uid('clue'),
+        night: room.day,
+        category: 'RECEPTIONIST',
+        title: `ตรวจห้อง ${roomNum} · ${isOccupied ? 'มีคนพักอยู่ (Occupied)' : 'ห้องว่าง (Empty)'}`,
+        detail: isOccupied
+          ? `คืนที่ ${room.day} ตรวจสมุดลงทะเบียนห้อง ${roomNum} พบว่า "มีคนพักอยู่ (Occupied)" (ไม่ระบุชื่อและบทบาท)`
+          : `คืนที่ ${room.day} ตรวจสมุดลงทะเบียนห้อง ${roomNum} พบว่า เป็น "ห้องว่าง (Empty)" ไม่มีผู้เข้าพัก`,
+        tone: isOccupied ? 'INFO' : 'SAFE',
+      };
+      player.clueLogs.push(clue);
+      room.night.tonightResultsByPlayerId.set(player.id, clue);
+      room.historyLog.push(
+        `คืน ${room.day}: พนักงานต้อนรับ (${player.name}) ตรวจห้อง ${roomNum} = ${isOccupied ? 'มีคนพัก' : 'ห้องว่าง'}`
+      );
+    } else if (player.role === 'SHADOW_ASSASSIN') {
+      if (player.shadowJamUses >= 2) return false;
+      const raw = String(target ?? '');
+      if (raw === 'SKIP') {
+        const skipClue: PrivateClueLog = {
+          id: uid('clue'),
+          night: room.day,
+          category: 'SHADOW_ASSASSIN',
+          title: `เก็บคลื่นรบกวน (เหลือ ${2 - player.shadowJamUses}/2 ครั้ง)`,
+          detail: `คืนที่ ${room.day} คุณเลือกเก็บสกิลก่อกวนไว้ใช้คืนถัดไป`,
+          tone: 'INFO',
+        };
+        room.night.tonightResultsByPlayerId.set(player.id, skipClue);
+      } else if (raw.startsWith('FLOOR:')) {
+        const f = Number(raw.slice(6)) as HotelFloorNumber;
+        if (!activeFloors.includes(f)) return false;
+        room.night.shadowJamKind = 'FLOOR';
+        room.night.shadowJamTarget = f;
+        player.shadowJamUses += 1;
+        const clue: PrivateClueLog = {
+          id: uid('clue'),
+          night: room.day,
+          category: 'SHADOW_ASSASSIN',
+          title: `ก่อกวนชั้น ${f} (เหลือ ${2 - player.shadowJamUses}/2 ครั้ง)`,
+          detail: `คืนที่ ${room.day} ปล่อยคลื่นรบกวนชั้น ${f} — หากแม่บ้านตรวจชั้นนี้จะได้ตัวเลขคลาดเคลื่อน ±1`,
+          tone: 'DANGER',
+        };
+        player.clueLogs.push(clue);
+        room.night.tonightResultsByPlayerId.set(player.id, clue);
+        broadcastJamPing(room, {
+          senderName: player.name,
+          kind: 'FLOOR',
+          floor: f,
+          column: null,
+          timestamp: Date.now(),
+        });
+        room.historyLog.push(`คืน ${room.day}: นักฆ่าเงา (${player.name}) ก่อกวนชั้น ${f}`);
+      } else if (raw.startsWith('COLUMN:')) {
+        const c = Number(raw.slice(7)) as HotelColumnNumber;
+        if (!HOTEL_COLUMNS.includes(c)) return false;
+        room.night.shadowJamKind = 'COLUMN';
+        room.night.shadowJamTarget = c;
+        player.shadowJamUses += 1;
+        const clue: PrivateClueLog = {
+          id: uid('clue'),
+          night: room.day,
+          category: 'SHADOW_ASSASSIN',
+          title: `ก่อกวนแถว ${c} (เหลือ ${2 - player.shadowJamUses}/2 ครั้ง)`,
+          detail: `คืนที่ ${room.day} ปล่อยคลื่นรบกวนแถวแนวตั้ง ${c} — หากช่างเช็ดกระจกตรวจแถวนี้จะได้ตัวเลขคลาดเคลื่อน ±1`,
+          tone: 'DANGER',
+        };
+        player.clueLogs.push(clue);
+        room.night.tonightResultsByPlayerId.set(player.id, clue);
+        broadcastJamPing(room, {
+          senderName: player.name,
+          kind: 'COLUMN',
+          floor: null,
+          column: c,
+          timestamp: Date.now(),
+        });
+        room.historyLog.push(`คืน ${room.day}: นักฆ่าเงา (${player.name}) ก่อกวนแถว ${c}`);
+      } else {
+        return false;
       }
     } else if (player.role === 'ACCOMPLICE') {
       const targetId = String(target);
@@ -1832,41 +1980,49 @@ async function startServer() {
     const housekeeper = aliveNow.find((p) => p.role === 'HOUSEKEEPER');
     if (housekeeper && room.night.housekeeperFloor) {
       const f = room.night.housekeeperFloor;
-      const count = aliveNow.filter((p) => p.room !== null && getFloorOfRoom(p.room) === f).length;
-      const detail = `ชั้น ${f} (ห้อง ${f}01–${f}03) มีผู้เล่นที่ยังมีชีวิตพักอยู่ทั้งหมด ${count} คน`;
+      const trueCount = aliveNow.filter((p) => p.room !== null && getFloorOfRoom(p.room) === f).length;
+      const isJammed = room.night.shadowJamKind === 'FLOOR' && room.night.shadowJamTarget === f;
+      const delta = trueCount === 0 ? 1 : Math.random() < 0.5 ? 1 : -1;
+      const reportedCount = isJammed ? Math.max(0, trueCount + delta) : trueCount;
+      const detail = `ชั้น ${f} (ห้อง ${f}01–${f}03) มีผู้เล่นที่ยังมีชีวิตพักอยู่ทั้งหมด ${reportedCount} คน`;
       const hkClue: PrivateClueLog = {
         id: uid('clue'),
         night: room.day,
         category: 'HOUSEKEEPER',
-        title: `ตรวจแนวนอน · ชั้น ${f} = ${count} คน`,
+        title: `ตรวจแนวนอน · ชั้น ${f} = ${reportedCount} คน`,
         detail,
-        tone: count > 0 ? 'INFO' : 'SAFE',
+        tone: reportedCount > 0 ? 'INFO' : 'SAFE',
       };
       housekeeper.clueLogs.push(hkClue);
       room.night.tonightResultsByPlayerId.set(housekeeper.id, hkClue);
-      room.historyLog.push(`คืน ${room.day}: แม่บ้าน (${housekeeper.name}) ตรวจชั้น ${f} = ${count} คน`);
+      room.historyLog.push(
+        `คืน ${room.day}: แม่บ้าน (${housekeeper.name}) ตรวจชั้น ${f} = ${reportedCount} คน${isJammed ? ` (ถูกนักฆ่าเงาก่อกวนจาก ${trueCount})` : ''}`
+      );
     }
 
     // 3. GLAZIER (ช่างเช็ดกระจก): Counts living players in selected vertical column across active floors
     const glazier = aliveNow.find((p) => p.role === 'GLAZIER');
     if (glazier && room.night.glazierColumn) {
       const c = room.night.glazierColumn;
-      const count = aliveNow.filter(
+      const trueCount = aliveNow.filter(
         (p) => p.room !== null && getColumnOfRoom(p.room) === c
       ).length;
-      const detail = `แนวตั้งแถวที่ ${c} (ห้อง 10${c}–${room.totalFloors}0${c}) มีผู้เล่นที่ยังมีชีวิตพักอยู่ทั้งหมด ${count} คน`;
+      const isJammed = room.night.shadowJamKind === 'COLUMN' && room.night.shadowJamTarget === c;
+      const delta = trueCount === 0 ? 1 : Math.random() < 0.5 ? 1 : -1;
+      const reportedCount = isJammed ? Math.max(0, trueCount + delta) : trueCount;
+      const detail = `แนวตั้งแถวที่ ${c} (ห้อง 10${c}–${room.totalFloors}0${c}) มีผู้เล่นที่ยังมีชีวิตพักอยู่ทั้งหมด ${reportedCount} คน`;
       const glClue: PrivateClueLog = {
         id: uid('clue'),
         night: room.day,
         category: 'GLAZIER',
-        title: `ตรวจแนวตั้ง · แถว ${c} (x0${c}) = ${count} คน`,
+        title: `ตรวจแนวตั้ง · แถว ${c} (x0${c}) = ${reportedCount} คน`,
         detail,
-        tone: count > 0 ? 'INFO' : 'SAFE',
+        tone: reportedCount > 0 ? 'INFO' : 'SAFE',
       };
       glazier.clueLogs.push(glClue);
       room.night.tonightResultsByPlayerId.set(glazier.id, glClue);
       room.historyLog.push(
-        `คืน ${room.day}: ช่างเช็ดกระจก (${glazier.name}) ตรวจแถวแนวตั้ง ${c} = ${count} คน`
+        `คืน ${room.day}: ช่างเช็ดกระจก (${glazier.name}) ตรวจแถวแนวตั้ง ${c} = ${reportedCount} คน${isJammed ? ` (ถูกนักฆ่าเงาก่อกวนจาก ${trueCount})` : ''}`
       );
     }
 
@@ -2050,6 +2206,7 @@ async function startServer() {
         botProfile,
         clueLogs: [],
         checkedPlayerIds: [],
+        shadowJamUses: 0,
       });
     }
 
@@ -2066,10 +2223,11 @@ async function startServer() {
       p.room = shuffledRooms[idx]; // Permanent fixed room for entire game!
     });
 
-    // 2. INITIAL 3 DEAD ROOMS: Randomly reveal 3 EMPTY rooms from active floors before Day 1 starts!
+    // 2. INITIAL DEAD ROOMS (5-6p: 2 rooms | 7-9p: 3 rooms | 10-12p: 4 rooms)
     const occupiedRoomSet = new Set(allPlayers.map((p) => p.room));
     const emptyRooms = shuffle(activeRooms.filter((r) => !occupiedRoomSet.has(r)));
-    const initialCrimeRooms = emptyRooms.slice(0, 3);
+    const initialCrimeCount = getInitialCrimeCountForPlayerCount(allPlayers.length);
+    const initialCrimeRooms = emptyRooms.slice(0, initialCrimeCount);
 
     room.revealedRooms = new Map();
     for (const r of initialCrimeRooms) {
@@ -2089,8 +2247,9 @@ async function startServer() {
     room.chat = [];
     room.secretChat = [];
     room.secretPing = null;
+    room.jamPing = null;
     room.historyLog = [
-      `เริ่มเกมใหม่ (${allPlayers.length} คน, โรงแรม ${room.totalFloors} ชั้น/${activeRooms.length} ห้อง, จำกัด ${room.maxDays} วัน) — เปิดห้องศพตั้งต้น 3 ห้อง: ${initialCrimeRooms.join(', ')}`,
+      `เริ่มเกมใหม่ (${allPlayers.length} คน, โรงแรม ${room.totalFloors} ชั้น/${activeRooms.length} ห้อง, จำกัด ${room.maxDays} วัน) — เปิดห้องศพตั้งต้น ${initialCrimeRooms.length} ห้อง: ${initialCrimeRooms.join(', ')}`,
     ];
     room.pastVoteRecords = [];
     room.morningReport = null;
@@ -2182,6 +2341,7 @@ async function startServer() {
     room.chat = [];
     room.secretChat = [];
     room.secretPing = null;
+    room.jamPing = null;
     room.historyLog = [];
     room.pastVoteRecords = [];
     room.morningReport = null;
@@ -2214,6 +2374,7 @@ async function startServer() {
         p.revealedRole = null;
         p.clueLogs = [];
         p.checkedPlayerIds = [];
+        p.shadowJamUses = 0;
       }
     }
 
@@ -2245,7 +2406,7 @@ async function startServer() {
           return;
         }
 
-        const maxPlayers = Math.max(5, Math.min(8, Number(payload?.maxPlayers) || 8));
+        const maxPlayers = Math.max(5, Math.min(MAX_PLAYERS_LIMIT, Number(payload?.maxPlayers) || 8));
         const roomCode = generateRoomCode();
         const playerId = uid('p');
         const playerToken = String(payload?.playerToken || uid('tok')).trim();
@@ -2271,6 +2432,7 @@ async function startServer() {
           avatarColor: HUMAN_AVATAR_COLORS[0],
           clueLogs: [],
           checkedPlayerIds: [],
+          shadowJamUses: 0,
         };
 
         const room: GameRoom = {
@@ -2289,6 +2451,7 @@ async function startServer() {
           chat: [],
           secretChat: [],
           secretPing: null,
+          jamPing: null,
           historyLog: [],
           pastVoteRecords: [],
           morningReport: null,
@@ -2429,8 +2592,8 @@ async function startServer() {
         }
 
         const currentHumans = Array.from(room.players.values()).filter((p) => !p.isBot);
-        if (currentHumans.length >= 8) {
-          ack?.({ ok: false, error: 'ห้องเต็มแล้ว (สูงสุด 8 คนตามบทบาทต้นฉบับ)' });
+        if (currentHumans.length >= MAX_PLAYERS_LIMIT) {
+          ack?.({ ok: false, error: `ห้องเต็มแล้ว (สูงสุด ${MAX_PLAYERS_LIMIT} คน)` });
           return;
         }
         if (currentHumans.some((p) => p.name.toLowerCase() === cleanName.toLowerCase())) {
@@ -2461,11 +2624,12 @@ async function startServer() {
           avatarColor: HUMAN_AVATAR_COLORS[currentHumans.length % HUMAN_AVATAR_COLORS.length],
           clueLogs: [],
           checkedPlayerIds: [],
+          shadowJamUses: 0,
         };
 
         room.players.set(playerId, newPlayer);
         if (currentHumans.length + 1 > room.maxPlayers) {
-          room.maxPlayers = Math.min(8, currentHumans.length + 1);
+          room.maxPlayers = Math.min(MAX_PLAYERS_LIMIT, currentHumans.length + 1);
           room.maxDays = getMaxDaysForPlayerCount(room.maxPlayers);
           room.totalFloors = getFloorCountForPlayerCount(room.maxPlayers);
         }
@@ -2489,11 +2653,39 @@ async function startServer() {
       const humanCount = Array.from(room.players.values()).filter((p) => !p.isBot).length;
       const requested = Number(payload?.maxPlayers);
       if (Number.isFinite(requested)) {
-        room.maxPlayers = Math.max(Math.max(5, humanCount), Math.min(8, Math.round(requested)));
+        room.maxPlayers = Math.max(Math.max(5, humanCount), Math.min(MAX_PLAYERS_LIMIT, Math.round(requested)));
         room.maxDays = getMaxDaysForPlayerCount(room.maxPlayers);
         room.totalFloors = getFloorCountForPlayerCount(room.maxPlayers);
         broadcastRoomState(room);
       }
+    });
+
+    socket.on('room:kickPlayer', (payload: { targetPlayerId?: string }) => {
+      const member = socketToMembership.get(socket.id);
+      if (!member) return;
+      const room = rooms.get(member.roomCode);
+      if (!room || room.phase !== 'LOBBY') return;
+      const host = room.players.get(member.playerId);
+      if (!host || !host.isHost) return;
+
+      const targetId = String(payload?.targetPlayerId ?? '').trim();
+      if (!targetId || targetId === host.id) return;
+      const target = room.players.get(targetId);
+      if (!target || target.isBot) return;
+
+      room.players.delete(targetId);
+      if (target.socketId) {
+        socketToMembership.delete(target.socketId);
+        io.to(target.socketId).emit('room:kicked', {
+          reason: `คุณถูกหัวหน้าห้อง (${host.name}) เชิญออกจากห้อง ${room.roomCode}`,
+        });
+        const targetSocket = io.sockets.sockets.get(target.socketId);
+        if (targetSocket) {
+          void targetSocket.leave(room.roomCode);
+        }
+      }
+
+      broadcastRoomState(room);
     });
 
     socket.on('game:start', () => {
@@ -2660,44 +2852,30 @@ async function startServer() {
       if (!cleanText) return;
       pushSecretEvilChat(room, player, cleanText);
 
-      // If the Evil partner is an alive AI bot, reply dynamically via live LLM!
+      // Token-saving cap: each Evil AI bot replies at most ONCE per night using concise bank lines
       const botPartner = getAlivePlayers(room).find(
         (p) =>
           p.id !== player.id &&
-          p.isBot &&
-          p.botProfile &&
-          p.room &&
-          (p.role === 'MURDERER' || p.role === 'ACCOMPLICE')
+          isControlledByAI(p) &&
+          p.role !== null &&
+          ROLE_DEFINITIONS[p.role].faction === 'EVIL' &&
+          !room.night.evilBotChatSentIds.has(p.id)
       );
-      if (botPartner && botPartner.botProfile && botPartner.room && (botPartner.role === 'MURDERER' || botPartner.role === 'ACCOMPLICE')) {
-        const partnerRole = botPartner.role;
-        const partnerProfile = botPartner.botProfile;
-        const partnerRoom = botPartner.room;
+      if (botPartner && botPartner.role) {
+        room.night.evilBotChatSentIds.add(botPartner.id);
+        const quickLine =
+          botPartner.role === 'MURDERER'
+            ? 'รับทราบเพื่อน เดี๋ยวกูจัดเชือดให้เนียนๆ เลย'
+            : botPartner.role === 'SHADOW_ASSASSIN'
+              ? 'โอเค เดี๋ยวกูป่วนสัญญาณให้ฝั่งคนดีส่องมั่วเอง'
+              : 'จัดไปเลยเพื่อน กูส่งซิกชี้เป้าไว้ให้แล้ว';
         scheduleRoomTimer(
           room,
           () => {
-            void (async () => {
-              if (!rooms.has(room.roomCode) || room.phase !== 'NIGHT' || !botPartner.alive) return;
-              const reply = await generateBotSecretReply({
-                bot: partnerProfile,
-                role: partnerRole,
-                myRoom: partnerRoom,
-                partnerName: player.name,
-                partnerRoom: player.room,
-                partnerMessage: cleanText,
-                day: room.day,
-                totalFloors: room.totalFloors,
-                unrevealedRooms: getUnrevealedRooms(room),
-                secretChat: room.secretChat,
-                privateClues: botPartner.clueLogs,
-              });
-              if (!reply || !rooms.has(room.roomCode) || room.phase !== 'NIGHT' || !botPartner.alive) {
-                return;
-              }
-              pushSecretEvilChat(room, botPartner, reply);
-            })();
+            if (!rooms.has(room.roomCode) || room.phase !== 'NIGHT' || !botPartner.alive) return;
+            pushSecretEvilChat(room, botPartner, quickLine);
           },
-          1300 + Math.floor(Math.random() * 800)
+          3000
         );
       }
     });
@@ -2752,6 +2930,41 @@ async function startServer() {
             floor: null,
             playerId: target.id,
             playerName: target.name,
+            timestamp: Date.now(),
+          });
+        }
+      }
+    );
+
+    // SHADOW ASSASSIN PURPLE JAMMING PING (FLOOR OR COLUMN)
+    socket.on(
+      'night:pingJam',
+      (payload: { kind?: 'FLOOR' | 'COLUMN'; floor?: number; column?: number }) => {
+        const member = socketToMembership.get(socket.id);
+        if (!member) return;
+        const room = rooms.get(member.roomCode);
+        if (!room || room.phase !== 'NIGHT') return;
+        const player = room.players.get(member.playerId);
+        if (!player || !player.alive || player.role !== 'SHADOW_ASSASSIN') return;
+
+        if (payload?.kind === 'FLOOR') {
+          const floorNum = Number(payload.floor) as HotelFloorNumber;
+          if (!getActiveFloors(room).includes(floorNum)) return;
+          broadcastJamPing(room, {
+            senderName: player.name,
+            kind: 'FLOOR',
+            floor: floorNum,
+            column: null,
+            timestamp: Date.now(),
+          });
+        } else if (payload?.kind === 'COLUMN') {
+          const colNum = Number(payload.column) as HotelColumnNumber;
+          if (!HOTEL_COLUMNS.includes(colNum)) return;
+          broadcastJamPing(room, {
+            senderName: player.name,
+            kind: 'COLUMN',
+            floor: null,
+            column: colNum,
             timestamp: Date.now(),
           });
         }
